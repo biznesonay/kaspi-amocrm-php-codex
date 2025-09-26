@@ -24,6 +24,8 @@
 - **AMO_PIPELINE_ID / AMO_STATUS_ID / AMO_RESPONSIBLE_USER_ID** — куда класть сделки.
 - **AMO_CATALOG_ID** — каталог товаров amoCRM. Позиции будут создаваться/переиспользоваться и привязываться к сделке.
 - **AMO_LEAD_ORDER_CODE_FIELD_ID (опц.)** — ID пользовательского поля «Order Code» на сделке.
+- **AMO_CONTACT_ADDRESS_FIELD_ID (опц.)** — ID пользовательского поля контакта для адреса доставки.
+- **AMO_LEAD_DELIVERY_ADDRESS_FIELD_ID (опц.)** — ID пользовательского поля сделки для адреса доставки.
 - **DEFAULT_COUNTRY** — по умолчанию `KZ` для нормализации телефонов.
 
 ## Готовность к запуску

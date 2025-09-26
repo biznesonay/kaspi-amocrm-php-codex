@@ -2,6 +2,55 @@
 declare(strict_types=1);
 require_once __DIR__.'/common.php';
 
+/**
+ * Normalize Kaspi order delivery address structure to a single string suitable for amoCRM fields.
+ * Known keys: formattedAddress, region, city, district, street, streetNumber, house, building, block,
+ * apartment, entrance, floor, comment. Unknown scalar values are appended as a fallback.
+ */
+function formatKaspiDeliveryAddress(array $attrs): string {
+    $delivery = $attrs['deliveryAddress'] ?? null;
+    if (is_string($delivery)) {
+        return trim($delivery);
+    }
+    if (!is_array($delivery)) {
+        return '';
+    }
+
+    $formatted = trim((string)($delivery['formattedAddress'] ?? ''));
+    if ($formatted !== '') {
+        return $formatted;
+    }
+
+    $parts = [];
+    $map = [
+        'region' => '%s',
+        'city' => '%s',
+        'district' => '%s',
+        'street' => 'ул. %s',
+        'streetNumber' => 'д. %s',
+        'house' => 'д. %s',
+        'building' => 'стр. %s',
+        'block' => 'корп. %s',
+        'apartment' => 'кв. %s',
+        'entrance' => 'подъезд %s',
+        'floor' => 'этаж %s',
+        'comment' => '%s',
+    ];
+    foreach ($map as $key => $mask) {
+        if (!isset($delivery[$key])) continue;
+        $value = trim((string)$delivery[$key]);
+        if ($value === '') continue;
+        $parts[] = sprintf($mask, $value);
+    }
+
+    if (!$parts) {
+        $fallback = array_filter(array_map(static fn($v) => is_scalar($v) ? trim((string)$v) : '', $delivery));
+        return $fallback ? implode(', ', $fallback) : '';
+    }
+
+    return implode(', ', $parts);
+}
+
 Logger::info('Fetch new orders: start');
 
 $kaspi = new KaspiClient();
@@ -22,6 +71,8 @@ $statusId   = (int) env('AMO_STATUS_ID', '0');
 $respUserId = (int) env('AMO_RESPONSIBLE_USER_ID', '0');
 $catalogId  = (int) env('AMO_CATALOG_ID', '0');
 $orderCodeFieldId = (int) env('AMO_LEAD_ORDER_CODE_FIELD_ID', '0');
+$contactAddressFieldId = (int) env('AMO_CONTACT_ADDRESS_FIELD_ID', '0');
+$leadDeliveryAddressFieldId = (int) env('AMO_LEAD_DELIVERY_ADDRESS_FIELD_ID', '0');
 
 $created = 0;
 
@@ -40,29 +91,57 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $customer = $order['relationships']['user']['data']['id'] ?? null;
     $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
     $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
+    $deliveryAddress = formatKaspiDeliveryAddress($attrs);
 
     // find or create contact
     $contactId = null;
+    $foundContact = null;
     if ($phone) {
-        $found = $amo->findContactByQuery($phone);
-        if ($found) $contactId = (int)$found['id'];
+        $foundContact = $amo->findContactByQuery($phone);
+        if ($foundContact) $contactId = (int)$foundContact['id'];
     }
     if (!$contactId) {
         $first = $attrs['customer']['firstName'] ?? ($attrs['firstName'] ?? 'Kaspi');
         $last  = $attrs['customer']['lastName']  ?? ($attrs['lastName'] ?? 'Customer');
+        $contactCustomFields = [];
+        if ($phone) {
+            $contactCustomFields[] = [
+                'field_code' => 'PHONE',
+                'values' => [['value' => $phone]],
+            ];
+        }
+        if ($contactAddressFieldId && $deliveryAddress) {
+            $contactCustomFields[] = [
+                'field_id' => $contactAddressFieldId,
+                'values' => [['value' => $deliveryAddress]],
+            ];
+        }
         $contactPayload = [[
             'first_name' => (string)$first,
             'last_name'  => (string)$last,
             'responsible_user_id' => $respUserId ?: null,
-            'custom_fields_values' => $phone ? [[
-                'field_code' => 'PHONE',
-                'values' => [['value' => $phone]]
-            ]] : null,
+            'custom_fields_values' => $contactCustomFields ?: null,
             'tags' => [['name' => 'Kaspi']],
         ]];
         $contactRes = $amo->createContacts($contactPayload);
         $createdContact = $contactRes['_embedded']['contacts'][0] ?? null;
         $contactId = $createdContact ? (int)$createdContact['id'] : null;
+    } elseif ($contactAddressFieldId && $deliveryAddress && $foundContact) {
+        $existingAddress = '';
+        $cfValues = $foundContact['custom_fields_values'] ?? [];
+        foreach ($cfValues as $cf) {
+            if ((int)($cf['field_id'] ?? 0) !== $contactAddressFieldId) continue;
+            $existingAddress = trim((string)($cf['values'][0]['value'] ?? ''));
+            break;
+        }
+        if ($existingAddress !== $deliveryAddress) {
+            $amo->updateContact($contactId, [
+                'custom_fields_values' => [[
+                    'field_id' => $contactAddressFieldId,
+                    'values' => [['value' => $deliveryAddress]],
+                ]],
+            ]);
+        }
     }
 
     // create lead
@@ -79,11 +158,21 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             'contacts' => $contactId ? [ ['id'=>$contactId] ] : [],
         ],
     ];
+    $leadCustomFields = [];
     if ($orderCodeFieldId) {
-        $lead['custom_fields_values'] = [[
+        $leadCustomFields[] = [
             'field_id' => $orderCodeFieldId,
-            'values' => [['value' => $code]]
-        ]];
+            'values' => [['value' => $code]],
+        ];
+    }
+    if ($leadDeliveryAddressFieldId && $deliveryAddress) {
+        $leadCustomFields[] = [
+            'field_id' => $leadDeliveryAddressFieldId,
+            'values' => [['value' => $deliveryAddress]],
+        ];
+    }
+    if ($leadCustomFields) {
+        $lead['custom_fields_values'] = $leadCustomFields;
     }
     $leadRes = $amo->createLeads([$lead]);
     $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
