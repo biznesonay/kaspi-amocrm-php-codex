@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__.'/lib/Logger.php';
+
 function env(string $key, $default=null) {
     static $cache = null;
     if ($cache === null) {
@@ -86,6 +88,66 @@ function env(string $key, $default=null) {
 // Basic error handler
 set_error_handler(function($severity, $message, $file, $line) {
     throw new ErrorException($message, 0, $severity, $file, $line);
+});
+
+/**
+ * Emit a short notification depending on the execution context so the user is
+ * aware an error occurred before checking the logs.
+ */
+function notifyBootstrapFailure(): void {
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "An unexpected error occurred. See logs for details.".PHP_EOL);
+        return;
+    }
+
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: text/plain; charset=UTF-8');
+    }
+    echo 'Internal Server Error';
+}
+
+function logUnhandled(\Throwable $e): void {
+    Logger::error('Unhandled exception', [
+        'type' => get_class($e),
+        'message' => $e->getMessage(),
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+        'trace' => $e->getTraceAsString(),
+    ]);
+}
+
+set_exception_handler(function (\Throwable $e): void {
+    logUnhandled($e);
+    notifyBootstrapFailure();
+});
+
+register_shutdown_function(function (): void {
+    $error = error_get_last();
+    if ($error === null) {
+        return;
+    }
+
+    $fatalTypes = [
+        E_ERROR,
+        E_PARSE,
+        E_CORE_ERROR,
+        E_COMPILE_ERROR,
+        E_USER_ERROR,
+    ];
+
+    if (!in_array($error['type'], $fatalTypes, true)) {
+        return;
+    }
+
+    Logger::error('Fatal error', [
+        'type' => $error['type'],
+        'message' => $error['message'] ?? '',
+        'file' => $error['file'] ?? '',
+        'line' => $error['line'] ?? 0,
+    ]);
+
+    notifyBootstrapFailure();
 });
 
 date_default_timezone_set('Asia/Almaty');
