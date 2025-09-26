@@ -9,6 +9,7 @@ $amo   = new AmoClient();
 $pdo   = Db::pdo();
 
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
+$previousWatermark = $watermark;
 $nowMs = (int) (microtime(true) * 1000);
 
 $filters = [
@@ -128,8 +129,15 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     $created++;
-    $watermark = max($watermark, (int)($attrs['creationDate'] ?? 0));
+    $creationDate = (int) ($attrs['creationDate'] ?? 0);
+    if ($creationDate > $watermark) {
+        $watermark = $creationDate;
+    }
 }
 
-Db::setSetting('last_creation_ms', (string)$nowMs);
-Logger::info('Fetch new orders: done', ['created'=>$created, 'new_watermark'=>$nowMs]);
+$storedWatermark = $created > 0 ? $watermark : $previousWatermark;
+Db::setSetting('last_creation_ms', (string)$storedWatermark);
+Logger::info('Fetch new orders: done', [
+    'created' => $created,
+    'stored_watermark' => $storedWatermark,
+]);
