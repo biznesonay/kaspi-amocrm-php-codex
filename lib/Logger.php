@@ -14,8 +14,8 @@ final class Logger {
         self::write('ERROR', $msg, $ctx);
     }
     private static function write(string $level, string $msg, array $ctx): void {
-        $line = sprintf("%s [%s] %s %s
-", date('c'), $level, $msg, $ctx ? json_encode($ctx, JSON_UNESCAPED_UNICODE): '');
-        file_put_contents(self::path(), $line, FILE_APPEND);
+        $context = $ctx ? json_encode($ctx, JSON_UNESCAPED_UNICODE) : '';
+        $line = sprintf("%s [%s] %s %s%s", date('c'), $level, $msg, $context, PHP_EOL);
+        file_put_contents(self::path(), $line, FILE_APPEND | LOCK_EX);
     }
 }
