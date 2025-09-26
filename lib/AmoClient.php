@@ -4,6 +4,7 @@ require_once __DIR__.'/../config.php';
 require_once __DIR__.'/Db.php';
 require_once __DIR__.'/Logger.php';
 require_once __DIR__.'/RateLimiter.php';
+require_once __DIR__.'/AmoUtils.php';
 
 final class AmoClient {
     private string $subdomain;
@@ -13,13 +14,19 @@ final class AmoClient {
     private RateLimiter $limiter;
 
     public function __construct() {
-        $this->subdomain   = trim((string) env('AMO_SUBDOMAIN', ''));
-        $this->clientId    = (string) env('AMO_CLIENT_ID', '');
-        $this->clientSecret= (string) env('AMO_CLIENT_SECRET', '');
-        $this->redirectUri = (string) env('AMO_REDIRECT_URI', '');
+        $rawSubdomain = (string) env('AMO_SUBDOMAIN', '');
+        $this->subdomain   = normalizeAmoSubdomain($rawSubdomain);
+        $this->clientId    = trim((string) env('AMO_CLIENT_ID', ''));
+        $this->clientSecret= trim((string) env('AMO_CLIENT_SECRET', ''));
+        $this->redirectUri = trim((string) env('AMO_REDIRECT_URI', ''));
         $this->limiter = new RateLimiter(7.0);
         if ($this->subdomain === '') {
+            Logger::error('AMO_SUBDOMAIN is empty after normalisation', ['value' => $rawSubdomain]);
             throw new RuntimeException('AMO_SUBDOMAIN is empty');
+        }
+        if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->subdomain)) {
+            Logger::error('AMO_SUBDOMAIN contains invalid characters', ['value' => $rawSubdomain, 'normalized' => $this->subdomain]);
+            throw new RuntimeException('AMO_SUBDOMAIN must contain only letters, digits, or hyphen');
         }
         // bootstrap from .env if presents (only until DB row is created)
         $envAccess  = env('AMO_ACCESS_TOKEN', '');
