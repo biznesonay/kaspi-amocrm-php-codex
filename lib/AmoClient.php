@@ -145,6 +145,11 @@ final class AmoClient {
         return $this->request('POST', '/api/v4/contacts', $contacts);
     }
 
+    public function updateContact(int $id, array $fields): array {
+        $fields['id'] = $id;
+        return $this->request('PATCH', '/api/v4/contacts', [$fields]);
+    }
+
     public function createLeads(array $leads): array {
         return $this->request('POST', '/api/v4/leads', $leads);
     }
