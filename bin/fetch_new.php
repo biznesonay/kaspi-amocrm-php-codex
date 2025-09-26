@@ -2,53 +2,55 @@
 declare(strict_types=1);
 require_once __DIR__.'/common.php';
 
-/**
- * Normalize Kaspi order delivery address structure to a single string suitable for amoCRM fields.
- * Known keys: formattedAddress, region, city, district, street, streetNumber, house, building, block,
- * apartment, entrance, floor, comment. Unknown scalar values are appended as a fallback.
- */
-function formatKaspiDeliveryAddress(array $attrs): string {
-    $delivery = $attrs['deliveryAddress'] ?? null;
-    if (is_string($delivery)) {
-        return trim($delivery);
-    }
-    if (!is_array($delivery)) {
-        return '';
-    }
+if (!function_exists('formatKaspiDeliveryAddress')) {
+    /**
+     * Normalize Kaspi order delivery address structure to a single string suitable for amoCRM fields.
+     * Known keys: formattedAddress, region, city, district, street, streetNumber, house, building, block,
+     * apartment, entrance, floor, comment. Unknown scalar values are appended as a fallback.
+     */
+    function formatKaspiDeliveryAddress(array $attrs): string {
+        $delivery = $attrs['deliveryAddress'] ?? null;
+        if (is_string($delivery)) {
+            return trim($delivery);
+        }
+        if (!is_array($delivery)) {
+            return '';
+        }
 
-    $formatted = trim((string)($delivery['formattedAddress'] ?? ''));
-    if ($formatted !== '') {
-        return $formatted;
-    }
+        $formatted = trim((string)($delivery['formattedAddress'] ?? ''));
+        if ($formatted !== '') {
+            return $formatted;
+        }
 
-    $parts = [];
-    $map = [
-        'region' => '%s',
-        'city' => '%s',
-        'district' => '%s',
-        'street' => 'ул. %s',
-        'streetNumber' => 'д. %s',
-        'house' => 'д. %s',
-        'building' => 'стр. %s',
-        'block' => 'корп. %s',
-        'apartment' => 'кв. %s',
-        'entrance' => 'подъезд %s',
-        'floor' => 'этаж %s',
-        'comment' => '%s',
-    ];
-    foreach ($map as $key => $mask) {
-        if (!isset($delivery[$key])) continue;
-        $value = trim((string)$delivery[$key]);
-        if ($value === '') continue;
-        $parts[] = sprintf($mask, $value);
-    }
+        $parts = [];
+        $map = [
+            'region' => '%s',
+            'city' => '%s',
+            'district' => '%s',
+            'street' => 'ул. %s',
+            'streetNumber' => 'д. %s',
+            'house' => 'д. %s',
+            'building' => 'стр. %s',
+            'block' => 'корп. %s',
+            'apartment' => 'кв. %s',
+            'entrance' => 'подъезд %s',
+            'floor' => 'этаж %s',
+            'comment' => '%s',
+        ];
+        foreach ($map as $key => $mask) {
+            if (!isset($delivery[$key])) continue;
+            $value = trim((string)$delivery[$key]);
+            if ($value === '') continue;
+            $parts[] = sprintf($mask, $value);
+        }
 
-    if (!$parts) {
-        $fallback = array_filter(array_map(static fn($v) => is_scalar($v) ? trim((string)$v) : '', $delivery));
-        return $fallback ? implode(', ', $fallback) : '';
-    }
+        if (!$parts) {
+            $fallback = array_filter(array_map(static fn($v) => is_scalar($v) ? trim((string)$v) : '', $delivery));
+            return $fallback ? implode(', ', $fallback) : '';
+        }
 
-    return implode(', ', $parts);
+        return implode(', ', $parts);
+    }
 }
 
 Logger::info('Fetch new orders: start');
