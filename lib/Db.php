@@ -33,7 +33,9 @@ final class Db {
     }
 
     public static function getSetting(string $key, ?string $default=null): ?string {
-        $stmt = self::pdo()->prepare("SELECT value FROM settings WHERE key = :key");
+        $driver = env('DB_DRIVER', 'mysql');
+        $column = $driver === 'pgsql' ? '"key"' : '`key`';
+        $stmt = self::pdo()->prepare("SELECT value FROM settings WHERE {$column} = :key");
         $stmt->execute([':key' => $key]);
         $row = $stmt->fetch();
         return $row['value'] ?? $default;
