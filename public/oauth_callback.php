@@ -39,11 +39,28 @@ if ($codeHttp >= 400) {
 }
 
 $data = json_decode($resp, true);
+if (!is_array($data)) {
+  Logger::error('amoCRM OAuth invalid JSON', ['http_code' => $codeHttp, 'body' => $resp]);
+  echo "Invalid response from amoCRM. Check logs for details.";
+  exit;
+}
+
 $access = $data['access_token'] ?? '';
 $refresh= $data['refresh_token'] ?? '';
-$exp = time() + (int)($data['expires_in'] ?? 3600);
+if (!$access || !$refresh) {
+  Logger::error('amoCRM OAuth missing tokens', ['http_code' => $codeHttp, 'body' => $resp]);
+  echo "Invalid response from amoCRM. Check logs for details.";
+  exit;
+}
 
-if (!$access || !$refresh) { echo "Invalid response"; exit; }
+$expiresIn = filter_var($data['expires_in'] ?? null, FILTER_VALIDATE_INT);
+if ($expiresIn === false || $expiresIn === null) {
+  Logger::error('amoCRM OAuth invalid expires_in', ['http_code' => $codeHttp, 'body' => $resp]);
+  echo "Invalid response from amoCRM. Check logs for details.";
+  exit;
+}
+
+$exp = time() + $expiresIn;
 
 // store
 $driver = env('DB_DRIVER', 'mysql');
