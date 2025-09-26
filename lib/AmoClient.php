@@ -21,12 +21,17 @@ final class AmoClient {
         if ($this->subdomain === '') {
             throw new RuntimeException('AMO_SUBDOMAIN is empty');
         }
-        // bootstrap from .env if presents
+        // bootstrap from .env if presents (only until DB row is created)
         $envAccess  = env('AMO_ACCESS_TOKEN', '');
         $envRefresh = env('AMO_REFRESH_TOKEN', '');
         $envExp     = (int) env('AMO_EXPIRES_AT', '0');
         if ($envAccess && $envRefresh) {
-            $this->saveTokens($envAccess, $envRefresh, $envExp ?: (time()+3600));
+            $stmt = Db::pdo()->prepare("SELECT 1 FROM oauth_tokens WHERE service = 'amocrm' LIMIT 1");
+            $stmt->execute();
+            $exists = (bool) $stmt->fetchColumn();
+            if (!$exists) {
+                $this->saveTokens($envAccess, $envRefresh, $envExp ?: (time()+3600));
+            }
         }
     }
 
