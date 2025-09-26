@@ -30,6 +30,21 @@ curl_setopt_array($ch, [
   CURLOPT_TIMEOUT => 30,
 ]);
 $resp = curl_exec($ch);
+if ($resp === false) {
+  $error = curl_error($ch);
+  Logger::error('amoCRM OAuth cURL error', ['error' => $error]);
+  echo 'Не удалось подключиться к amoCRM, проверьте доступность API.';
+  curl_close($ch);
+  exit;
+}
+
+if (!is_string($resp)) {
+  curl_close($ch);
+  Logger::error('amoCRM OAuth unexpected response type', ['type' => gettype($resp)]);
+  echo 'Invalid response from amoCRM. Check logs for details.';
+  exit;
+}
+
 $codeHttp = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 curl_close($ch);
 
