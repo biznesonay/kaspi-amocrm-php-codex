@@ -89,10 +89,25 @@ final class AmoClient {
         curl_close($ch);
         if ($code >= 400) throw new RuntimeException("amoCRM refresh HTTP $code: $resp");
         $data = json_decode($resp, true);
+        if (!is_array($data)) {
+            Logger::error('amoCRM refresh invalid JSON', ['http_code' => $code, 'body' => $resp]);
+            throw new RuntimeException('amoCRM refresh invalid JSON response: '.$resp);
+        }
+
         $access = $data['access_token'] ?? null;
         $refresh= $data['refresh_token'] ?? null;
-        $exp    = time() + (int)($data['expires_in'] ?? 3600);
-        if (!$access || !$refresh) throw new RuntimeException('amoCRM refresh malformed');
+        if (!$access || !$refresh) {
+            Logger::error('amoCRM refresh missing tokens', ['http_code' => $code, 'body' => $resp]);
+            throw new RuntimeException('amoCRM refresh malformed: '.$resp);
+        }
+
+        $expiresIn = filter_var($data['expires_in'] ?? null, FILTER_VALIDATE_INT);
+        if ($expiresIn === false || $expiresIn === null) {
+            Logger::error('amoCRM refresh invalid expires_in', ['http_code' => $code, 'body' => $resp]);
+            throw new RuntimeException('amoCRM refresh invalid expires_in: '.$resp);
+        }
+
+        $exp    = time() + $expiresIn;
         $this->saveTokens($access, $refresh, $exp);
         return $access;
     }
