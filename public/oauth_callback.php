@@ -3,14 +3,42 @@ declare(strict_types=1);
 require_once __DIR__.'/../config.php';
 require_once __DIR__.'/../lib/Db.php';
 require_once __DIR__.'/../lib/Logger.php';
+require_once __DIR__.'/../lib/AmoUtils.php';
 
 $code = $_GET['code'] ?? null;
-$sub = env('AMO_SUBDOMAIN');
-$cid = env('AMO_CLIENT_ID');
-$sec = env('AMO_CLIENT_SECRET');
-$redir = env('AMO_REDIRECT_URI');
+$rawSub = trim((string) env('AMO_SUBDOMAIN', ''));
+$cid = trim((string) env('AMO_CLIENT_ID', ''));
+$sec = trim((string) env('AMO_CLIENT_SECRET', ''));
+$redir = trim((string) env('AMO_REDIRECT_URI', ''));
 
 if (!$code) { echo "Missing code"; exit; }
+
+$required = [
+    'AMO_SUBDOMAIN' => $rawSub,
+    'AMO_CLIENT_ID' => $cid,
+    'AMO_CLIENT_SECRET' => $sec,
+    'AMO_REDIRECT_URI' => $redir,
+];
+foreach ($required as $key => $value) {
+    if ($value === '') {
+        Logger::error('Missing amoCRM configuration value', ['key' => $key]);
+        echo "Configuration error: environment variable {$key} is not set.";
+        exit;
+    }
+}
+
+$sub = normalizeAmoSubdomain($rawSub);
+if ($sub === '') {
+    Logger::error('Invalid AMO_SUBDOMAIN after normalisation', ['value' => $rawSub]);
+    echo 'Configuration error: AMO_SUBDOMAIN is invalid after normalisation.';
+    exit;
+}
+
+if (!preg_match('/^[a-zA-Z0-9-]+$/', $sub)) {
+    Logger::error('AMO_SUBDOMAIN contains invalid characters', ['value' => $rawSub, 'normalized' => $sub]);
+    echo 'Configuration error: AMO_SUBDOMAIN must contain only letters, digits, or hyphens.';
+    exit;
+}
 
 $payload = json_encode([
   'client_id' => $cid,
