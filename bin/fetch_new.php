@@ -62,9 +62,11 @@ $pdo   = Db::pdo();
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
 $previousWatermark = $watermark;
 $nowMs = (int) (microtime(true) * 1000);
+$minAllowed = $nowMs - 14 * 24 * 3600 * 1000;
 
 $filters = [
-    'filter[orders][creationDate][$ge]' => $watermark,
+    // Kaspi limits filtering by creationDate to the last 14 days
+    'filter[orders][creationDate][$ge]' => max($watermark, $minAllowed),
     'filter[orders][state]' => 'NEW', // adjust as needed
 ];
 
