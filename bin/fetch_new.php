@@ -90,7 +90,6 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $row = $stmt->fetch();
     if ($row && (int)$row['lead_id'] > 0) continue; // already processed
 
-    $customer = $order['relationships']['user']['data']['id'] ?? null;
     $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
     $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
     $deliveryAddress = formatKaspiDeliveryAddress($attrs);
