@@ -34,10 +34,14 @@ foreach ($paths as $name => $path) {
 echo "Рекомендуемые команды для cron:\n";
 echo "\n";
 echo "[Supervisor/systemd] Один процесс-планировщик:\n";
-printf("  php %s --loop >> %s 2>&1\n", $paths['scheduler'], $logPath);
+$schedulerPath = escapeshellarg($paths['scheduler']);
+$quotedLogPath = escapeshellarg($logPath);
+printf("  php %s --loop >> %s 2>&1\n", $schedulerPath, $quotedLogPath);
 echo "\n";
 echo "[Cron на shared-хостинге] Отдельные задания:\n";
-printf("  * * * * * php %s >> %s 2>&1\n", $paths['fetch_new'], $logPath);
-printf("  */10 * * * * php %s >> %s 2>&1\n", $paths['reconcile'], $logPath);
+$fetchNewPath = escapeshellarg($paths['fetch_new']);
+$reconcilePath = escapeshellarg($paths['reconcile']);
+printf("  * * * * * php %s >> %s 2>&1\n", $fetchNewPath, $quotedLogPath);
+printf("  */10 * * * * php %s >> %s 2>&1\n", $reconcilePath, $quotedLogPath);
 echo "\n";
 echo "Логи будут сохраняться в: {$logPath}\n";

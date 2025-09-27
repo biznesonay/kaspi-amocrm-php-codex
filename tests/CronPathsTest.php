@@ -18,8 +18,9 @@ foreach ($expected as $path) {
         fwrite(STDERR, "Ожидался существующий путь, но realpath вернул false\n");
         exit(1);
     }
-    if (strpos($output, (string) $path) === false) {
-        fwrite(STDERR, "В выводе отсутствует путь: {$path}\n");
+    $quotedPath = escapeshellarg($path);
+    if (strpos($output, $quotedPath) === false) {
+        fwrite(STDERR, "В выводе отсутствует путь: {$quotedPath}\n");
         exit(1);
     }
 }
