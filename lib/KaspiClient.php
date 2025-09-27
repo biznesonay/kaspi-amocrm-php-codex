@@ -55,7 +55,6 @@ final class KaspiClient {
             $query = [
                 'page[number]' => $page,
                 'page[size]' => $pageSize,
-                'include[orders]' => 'user',
             ];
             foreach ($filters as $k => $v) {
                 $query[$k] = $v;
