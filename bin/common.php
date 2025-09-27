@@ -6,6 +6,7 @@ require_once __DIR__.'/../lib/Logger.php';
 require_once __DIR__.'/../lib/Phone.php';
 require_once __DIR__.'/../lib/KaspiClient.php';
 require_once __DIR__.'/../lib/AmoClient.php';
+require_once __DIR__.'/../lib/PayloadBuilder.php';
 
 function normalizePhone(string $raw): string {
     $def = env('DEFAULT_COUNTRY', 'KZ');

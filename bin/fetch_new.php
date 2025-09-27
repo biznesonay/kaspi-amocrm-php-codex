@@ -118,13 +118,13 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 'values' => [['value' => $deliveryAddress]],
             ];
         }
-        $contactPayload = [[
-            'first_name' => (string)$first,
-            'last_name'  => (string)$last,
-            'responsible_user_id' => $respUserId ?: null,
-            'custom_fields_values' => $contactCustomFields ?: null,
-            'tags' => [['name' => 'Kaspi']],
-        ]];
+        $contactPayload = [amoBuildContactPayload(
+            (string)$first,
+            (string)$last,
+            $respUserId ?: null,
+            $contactCustomFields,
+            [['name' => 'Kaspi']]
+        )];
         $contactRes = $amo->createContacts($contactPayload);
         $createdContact = $contactRes['_embedded']['contacts'][0] ?? null;
         $contactId = $createdContact ? (int)$createdContact['id'] : null;
@@ -149,17 +149,6 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     // create lead
     $leadName = 'Kaspi Order '.$code;
     $price = (int) ($attrs['totalPrice'] ?? 0);
-    $lead = [
-        'name' => $leadName,
-        'price'=> $price,
-        'pipeline_id' => $pipelineId ?: null,
-        'status_id' => $statusId ?: null,
-        'responsible_user_id' => $respUserId ?: null,
-        'tags' => [ ['name'=>'Kaspi'], ['name'=>'Marketplace'] ],
-        '_embedded' => [
-            'contacts' => $contactId ? [ ['id'=>$contactId] ] : [],
-        ],
-    ];
     $leadCustomFields = [];
     if ($orderCodeFieldId) {
         $leadCustomFields[] = [
@@ -173,9 +162,19 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             'values' => [['value' => $deliveryAddress]],
         ];
     }
-    if ($leadCustomFields) {
-        $lead['custom_fields_values'] = $leadCustomFields;
-    }
+    $lead = amoBuildLeadPayload(
+        $leadName,
+        $price,
+        $pipelineId ?: null,
+        $statusId ?: null,
+        $respUserId ?: null,
+        $leadCustomFields,
+        $contactId ? [['id' => $contactId]] : [],
+        [
+            ['name' => 'Kaspi'],
+            ['name' => 'Marketplace'],
+        ]
+    );
     $leadRes = $amo->createLeads([$lead]);
     $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
     if ($leadId <= 0) {
