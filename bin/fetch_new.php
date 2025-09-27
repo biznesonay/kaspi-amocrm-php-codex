@@ -79,6 +79,9 @@ $catalogId  = (int) env('AMO_CATALOG_ID', '0');
 $orderCodeFieldId = (int) env('AMO_LEAD_ORDER_CODE_FIELD_ID', '0');
 $contactAddressFieldId = (int) env('AMO_CONTACT_ADDRESS_FIELD_ID', '0');
 $leadDeliveryAddressFieldId = (int) env('AMO_LEAD_DELIVERY_ADDRESS_FIELD_ID', '0');
+$leadOrderDateFieldId = (int) env('AMO_LEAD_ORDER_DATE_FIELD_ID', '0');
+$projectTimezone = new DateTimeZone(date_default_timezone_get());
+$utcTimezone = new DateTimeZone('UTC');
 
 $created = 0;
 
@@ -87,6 +90,25 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $orderId = $order['id'] ?? '';
     $code = $attrs['code'] ?? '';
     if (!$code) continue;
+
+    $creationDateMs = 0;
+    $orderCreationDateIso = null;
+    $creationDateRaw = $attrs['creationDate'] ?? null;
+    if (is_numeric($creationDateRaw)) {
+        $creationDateMs = (int) $creationDateRaw;
+        if ($creationDateMs > 0) {
+            $seconds = intdiv($creationDateMs, 1000);
+            $milliseconds = $creationDateMs % 1000;
+            $datetime = DateTimeImmutable::createFromFormat(
+                'U.u',
+                sprintf('%d.%03d', $seconds, $milliseconds),
+                $utcTimezone
+            );
+            if ($datetime instanceof DateTimeImmutable) {
+                $orderCreationDateIso = $datetime->setTimezone($projectTimezone)->format(DATE_ATOM);
+            }
+        }
+    }
 
     // anti-duplicate check in DB
     $stmt = $pdo->prepare("SELECT lead_id FROM orders_map WHERE order_code=:c");
@@ -165,6 +187,12 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             'values' => [['value' => $deliveryAddress]],
         ];
     }
+    if ($leadOrderDateFieldId && $orderCreationDateIso) {
+        $leadCustomFields[] = [
+            'field_id' => $leadOrderDateFieldId,
+            'values' => [['value' => $orderCreationDateIso]],
+        ];
+    }
     $lead = amoBuildLeadPayload(
         $leadName,
         $price,
@@ -228,9 +256,8 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     $created++;
-    $creationDate = (int) ($attrs['creationDate'] ?? 0);
-    if ($creationDate > $watermark) {
-        $watermark = $creationDate;
+    if ($creationDateMs > $watermark) {
+        $watermark = $creationDateMs;
     }
 }
 
