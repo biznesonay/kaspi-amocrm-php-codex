@@ -32,7 +32,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     if (!$code) continue;
 
     // find mapping
-    $stmt = $pdo->prepare("SELECT lead_id FROM orders_map WHERE order_code=:c");
+    $stmt = $pdo->prepare("SELECT lead_id, total_price FROM orders_map WHERE order_code=:c");
     $stmt->execute([':c'=>$code]);
     $row = $stmt->fetch();
     if (!$row) continue;
@@ -41,10 +41,20 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
     // Compare & update lead price if changed
     $sum = (int) ($attrs['totalPrice'] ?? 0);
-    try {
-        $amo->updateLead($leadId, ['price'=>$sum]);
-    } catch (Throwable $e) {
-        Logger::error('Update lead failed', ['leadId'=>$leadId, 'err'=>$e->getMessage()]);
+    $storedTotal = $row['total_price'] ?? null;
+    $hasStoredTotal = $storedTotal !== null;
+    $storedTotalInt = $hasStoredTotal ? (int)$storedTotal : null;
+    $needsLeadUpdate = !$hasStoredTotal || $storedTotalInt !== $sum;
+
+    if ($needsLeadUpdate) {
+        try {
+            $amo->updateLead($leadId, ['price'=>$sum]);
+            $stmtUpdate = $pdo->prepare("UPDATE orders_map SET total_price=:p WHERE order_code=:c");
+            $stmtUpdate->execute([':p'=>$sum, ':c'=>$code]);
+            $updated++;
+        } catch (Throwable $e) {
+            Logger::error('Update lead failed', ['leadId'=>$leadId, 'err'=>$e->getMessage()]);
+        }
     }
 
     // Refresh entries (re-link quantities)
@@ -70,7 +80,6 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
     }
 
-    $updated++;
 }
 
 Db::setSetting('last_check_ms', (string)$nowMs);

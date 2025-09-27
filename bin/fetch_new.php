@@ -186,8 +186,14 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     // store map
-    $stmt = $pdo->prepare("INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, created_at) VALUES(:c,:o,:l, NOW())");
-    $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId]);
+    if ($row) {
+        $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
+    } else {
+        $stmt = $pdo->prepare(
+            "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at) VALUES(:c,:o,:l,:p, NOW())"
+        );
+    }
+    $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
 
     // add items
     if ($catalogId > 0) {
