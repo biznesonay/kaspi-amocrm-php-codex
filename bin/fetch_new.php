@@ -68,6 +68,7 @@ $creationDateFrom = max($watermark, $minAllowed);
 $filters = [
     // Kaspi limits filtering by creationDate to the last 14 days
     'filter[orders][creationDate][$ge]' => $creationDateFrom,
+    'filter[orders][creationDate][$le]' => $nowMs,
     'filter[orders][state]' => 'NEW', // adjust as needed
 ];
 
