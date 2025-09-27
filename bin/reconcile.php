@@ -20,6 +20,7 @@ $from = max($sevenDaysAgo, $lastCheck);
 
 $filters = [
     'filter[orders][creationDate][$ge]' => $from,
+    'filter[orders][creationDate][$le]' => $nowMs,
 ];
 
 $updated = 0;
