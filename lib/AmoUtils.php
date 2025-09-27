@@ -7,16 +7,26 @@ function normalizeAmoSubdomain(string $raw): string {
         return '';
     }
 
-    $lower = strtolower($normalized);
-    if (str_starts_with($lower, 'https://')) {
-        $normalized = substr($normalized, 8);
-    } elseif (str_starts_with($lower, 'http://')) {
-        $normalized = substr($normalized, 7);
+    $host = parse_url($normalized, PHP_URL_HOST);
+    if ($host === false) {
+        $host = null;
+    }
+    if ($host === null || $host === '') {
+        $host = parse_url('https://'.ltrim($normalized, '/'), PHP_URL_HOST);
+        if ($host === false) {
+            $host = null;
+        }
+    }
+    if (is_string($host) && $host !== '') {
+        $normalized = $host;
+    } else {
+        $normalized = rtrim($normalized, "/\\");
     }
 
-    $normalized = rtrim($normalized, "/\\");
-    if (preg_match('~\.amocrm\.ru$~i', $normalized)) {
-        $normalized = preg_replace('~\.amocrm\.ru$~i', '', $normalized);
+    $normalized = trim($normalized);
+    $stripped = preg_replace('~\.amocrm(?:\.[a-z0-9-]+)+$~i', '', $normalized, -1, $count);
+    if ($stripped !== null && $count > 0) {
+        $normalized = $stripped;
     }
 
     return trim($normalized);

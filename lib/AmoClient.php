@@ -24,6 +24,10 @@ final class AmoClient {
             Logger::error('AMO_SUBDOMAIN is empty after normalisation', ['value' => $rawSubdomain]);
             throw new RuntimeException('AMO_SUBDOMAIN is empty');
         }
+        if (str_contains($this->subdomain, '.')) {
+            Logger::error('AMO_SUBDOMAIN still contains dots after normalisation', ['value' => $rawSubdomain, 'normalized' => $this->subdomain]);
+            throw new RuntimeException('AMO_SUBDOMAIN must not contain dots');
+        }
         if (!preg_match('/^[a-zA-Z0-9-]+$/', $this->subdomain)) {
             Logger::error('AMO_SUBDOMAIN contains invalid characters', ['value' => $rawSubdomain, 'normalized' => $this->subdomain]);
             throw new RuntimeException('AMO_SUBDOMAIN must contain only letters, digits, or hyphen');
