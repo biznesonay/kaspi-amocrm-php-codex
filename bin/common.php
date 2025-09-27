@@ -13,6 +13,3 @@ function normalizePhone(string $raw): string {
     return Phone::toE164($raw, $def);
 }
 
-function getOrderCode(array $order): string {
-    return (string)($order['attributes']['code'] ?? '');
-}
