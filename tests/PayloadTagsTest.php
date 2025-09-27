@@ -10,8 +10,8 @@ function assertTrue(bool $condition, string $message): void {
     }
 }
 
-$contact = amoBuildContactPayload('Kaspi', 'Customer', null, [], [['name' => 'Kaspi']]);
-assertTrue(isset($contact['_embedded']['tags']), 'У контакта отсутствуют теги в _embedded');
+$contact = amoBuildContactPayload('Kaspi', 'Customer', null, [], []);
+assertTrue(!isset($contact['_embedded']['tags']), 'У контакта не должно быть тегов в _embedded, если массив тегов пуст');
 assertTrue(!isset($contact['tags']), 'Корневой ключ tags не должен присутствовать у контакта');
 assertTrue(!array_key_exists('custom_fields_values', $contact), 'custom_fields_values не должен присутствовать, если массив пуст');
 
@@ -24,6 +24,7 @@ $customField = [
 ];
 $contactWithFields = amoBuildContactPayload('Kaspi', 'Customer', 42, [$customField], [['name' => 'Kaspi']]);
 assertTrue(array_key_exists('custom_fields_values', $contactWithFields), 'custom_fields_values должен присутствовать, если массив не пуст');
+assertTrue(isset($contactWithFields['_embedded']['tags']), 'У контакта должны быть теги в _embedded, если они переданы');
 
 $lead = amoBuildLeadPayload(
     'Kaspi Order 123',
