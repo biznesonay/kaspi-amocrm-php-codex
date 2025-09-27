@@ -199,7 +199,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
             $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
             $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
-            $lines[] = [$sku, $qty, $priceItem];
+            $lines[] = [$title, $sku, $qty, $priceItem];
 
             // find or create catalog element by SKU or title
             $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
@@ -215,8 +215,8 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
         // summary note
         if ($lines) {
-            $text = "Позиции заказа:\nSKU | Qty | Price\n";
-            foreach ($lines as [$s,$q,$p]) { $text .= "{$s} | {$q} | {$p}\n"; }
+            $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
+            foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
             $amo->addNote($leadId, $text);
         }
     }
