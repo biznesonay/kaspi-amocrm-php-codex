@@ -126,7 +126,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             (string)$last,
             $respUserId ?: null,
             $contactCustomFields,
-            [['name' => 'Kaspi']]
+            []
         )];
         $contactRes = $amo->createContacts($contactPayload);
         $createdContact = $contactRes['_embedded']['contacts'][0] ?? null;
