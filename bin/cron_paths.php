@@ -18,6 +18,13 @@ if (!is_dir($logDir)) {
 
 $logPath = $logDir.'/scheduler.log';
 
+$cliPhp = getenv('CLI_PHP');
+if ($cliPhp === false || $cliPhp === '') {
+    $cliPhp = PHP_BINARY;
+}
+
+$php = escapeshellarg($cliPhp);
+
 $paths = [
     'fetch_new' => realpath(__DIR__.'/fetch_new.php'),
     'reconcile' => realpath(__DIR__.'/reconcile.php'),
@@ -36,12 +43,12 @@ echo "\n";
 echo "[Supervisor/systemd] Один процесс-планировщик:\n";
 $schedulerPath = escapeshellarg($paths['scheduler']);
 $quotedLogPath = escapeshellarg($logPath);
-printf("  php %s --loop >> %s 2>&1\n", $schedulerPath, $quotedLogPath);
+printf("  %s %s --loop >> %s 2>&1\n", $php, $schedulerPath, $quotedLogPath);
 echo "\n";
 echo "[Cron на shared-хостинге] Отдельные задания:\n";
 $fetchNewPath = escapeshellarg($paths['fetch_new']);
 $reconcilePath = escapeshellarg($paths['reconcile']);
-printf("  * * * * * php %s >> %s 2>&1\n", $fetchNewPath, $quotedLogPath);
-printf("  */10 * * * * php %s >> %s 2>&1\n", $reconcilePath, $quotedLogPath);
+printf("  * * * * * %s %s >> %s 2>&1\n", $php, $fetchNewPath, $quotedLogPath);
+printf("  */10 * * * * %s %s >> %s 2>&1\n", $php, $reconcilePath, $quotedLogPath);
 echo "\n";
 echo "Логи будут сохраняться в: {$logPath}\n";
