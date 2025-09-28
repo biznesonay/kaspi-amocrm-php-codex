@@ -224,17 +224,17 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
 
     // add items
-    if ($catalogId > 0) {
-        $entries = $kaspi->getOrderEntries($orderId);
-        $lines = [];
-        foreach ($entries as $e) {
-            $eAttrs = $e['attributes'] ?? [];
-            $qty = (int) ($eAttrs['quantity'] ?? 1);
-            $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
-            $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
-            $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
-            $lines[] = [$title, $sku, $qty, $priceItem];
+    $entries = $kaspi->getOrderEntries($orderId);
+    $lines = [];
+    foreach ($entries as $e) {
+        $eAttrs = $e['attributes'] ?? [];
+        $qty = (int) ($eAttrs['quantity'] ?? 1);
+        $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
+        $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
+        $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
+        $lines[] = [$title, $sku, $qty, $priceItem];
 
+        if ($catalogId > 0) {
             // find or create catalog element by SKU or title
             $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
             if (!$found) {
@@ -247,12 +247,12 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
             }
         }
-        // summary note
-        if ($lines) {
-            $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
-            foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
-            $amo->addNote($leadId, $text);
-        }
+    }
+    // summary note
+    if ($lines) {
+        $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
+        foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
+        $amo->addNote($leadId, $text);
     }
 
     $created++;
