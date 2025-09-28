@@ -53,6 +53,28 @@ if (!function_exists('formatKaspiDeliveryAddress')) {
     }
 }
 
+if (!function_exists('releaseOrderReservation')) {
+    function releaseOrderReservation(PDO $pdo, string $code, string $processingToken): void {
+        try {
+            $stmt = $pdo->prepare(
+                'UPDATE orders_map ' .
+                'SET lead_id = 0, processing_token = NULL, processing_at = NULL ' .
+                'WHERE order_code = :code AND processing_token = :token'
+            );
+            $stmt->execute([
+                ':code' => $code,
+                ':token' => $processingToken,
+            ]);
+        } catch (Throwable $e) {
+            Logger::error('Failed to release order reservation', [
+                'code' => $code,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+            ]);
+        }
+    }
+}
+
 Logger::info('Fetch new orders: start');
 
 $kaspi = new KaspiClient();
@@ -112,14 +134,15 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
     $price = (int) ($attrs['totalPrice'] ?? 0);
     $processingToken = bin2hex(random_bytes(16));
-    $transactionStarted = false;
+    $leadId = 0;
 
+    $reservationTransactionStarted = false;
     try {
         if (!$pdo->beginTransaction()) {
-            Logger::error('Failed to start transaction for order', ['code' => $code]);
+            Logger::error('Failed to start reservation transaction for order', ['code' => $code]);
             continue;
         }
-        $transactionStarted = true;
+        $reservationTransactionStarted = true;
 
         $stmtSelect = $pdo->prepare(
             'SELECT lead_id, processing_token FROM orders_map WHERE order_code = :code FOR UPDATE'
@@ -141,14 +164,14 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 ]);
             } catch (PDOException $e) {
                 $pdo->rollBack();
-                $transactionStarted = false;
+                $reservationTransactionStarted = false;
                 Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
                 continue;
             }
         } else {
             if ((int) ($existing['lead_id'] ?? 0) > 0) {
                 $pdo->rollBack();
-                $transactionStarted = false;
+                $reservationTransactionStarted = false;
                 Logger::info('Order already linked with a lead, skip', ['code' => $code]);
                 continue;
             }
@@ -156,7 +179,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             $foreignToken = trim((string) ($existing['processing_token'] ?? ''));
             if ($foreignToken !== '' && $foreignToken !== $processingToken) {
                 $pdo->rollBack();
-                $transactionStarted = false;
+                $reservationTransactionStarted = false;
                 Logger::info('Order is already being processed by another worker, skip lead creation', ['code' => $code]);
                 continue;
             }
@@ -173,6 +196,30 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 ':code' => $code,
             ]);
         }
+
+        $pdo->commit();
+        $reservationTransactionStarted = false;
+    } catch (Throwable $e) {
+        if ($reservationTransactionStarted && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        Logger::error('Failed to reserve order for processing', [
+            'code' => $code,
+            'error' => $e->getMessage(),
+            'exception' => get_class($e),
+        ]);
+        continue;
+    }
+
+    $transactionStarted = false;
+
+    try {
+        if (!$pdo->beginTransaction()) {
+            releaseOrderReservation($pdo, $code, $processingToken);
+            Logger::error('Failed to start transaction for order', ['code' => $code]);
+            continue;
+        }
+        $transactionStarted = true;
 
         $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
         $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
@@ -266,10 +313,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         $leadRes = $amo->createLeads([$lead]);
         $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
         if ($leadId <= 0) {
-            $pdo->rollBack();
-            $transactionStarted = false;
-            Logger::error('Lead creation failed', ['code' => $code]);
-            continue;
+            throw new RuntimeException('Lead creation failed');
         }
 
         // add items
@@ -313,20 +357,36 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
         $pdo->commit();
         $transactionStarted = false;
+
+        $created++;
+        if ($creationDateMs > $watermark) {
+            $watermark = $creationDateMs;
+        }
     } catch (Throwable $e) {
         if ($transactionStarted && $pdo->inTransaction()) {
             $pdo->rollBack();
         }
+        if ($leadId > 0) {
+            try {
+                $amo->deleteLead($leadId);
+            } catch (Throwable $deleteError) {
+                Logger::error('Failed to delete lead after rollback', [
+                    'code' => $code,
+                    'lead_id' => $leadId,
+                    'error' => $deleteError->getMessage(),
+                    'exception' => get_class($deleteError),
+                ]);
+            }
+        }
+
+        releaseOrderReservation($pdo, $code, $processingToken);
+
         Logger::error('Failed to process order', [
             'code' => $code,
             'error' => $e->getMessage(),
+            'exception' => get_class($e),
         ]);
         continue;
-    }
-
-    $created++;
-    if ($creationDateMs > $watermark) {
-        $watermark = $creationDateMs;
     }
 }
 
