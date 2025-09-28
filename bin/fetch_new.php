@@ -58,6 +58,7 @@ Logger::info('Fetch new orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
+$dbDriver = env('DB_DRIVER', 'mysql');
 
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
 $previousWatermark = $watermark;
@@ -110,11 +111,36 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
     }
 
-    // anti-duplicate check in DB
-    $stmt = $pdo->prepare("SELECT lead_id FROM orders_map WHERE order_code=:c");
-    $stmt->execute([':c'=>$code]);
-    $row = $stmt->fetch();
-    if ($row && (int)$row['lead_id'] > 0) continue; // already processed
+    $price = (int) ($attrs['totalPrice'] ?? 0);
+
+    // try to reserve order processing to avoid duplicates
+    if ($dbDriver === 'pgsql') {
+        $reserveSql = "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at)
+                       VALUES(:code, :order_id, 0, :total_price, NOW())
+                       ON CONFLICT (order_code) DO UPDATE
+                       SET kaspi_order_id = EXCLUDED.kaspi_order_id,
+                           total_price = EXCLUDED.total_price,
+                           created_at = CASE WHEN orders_map.lead_id = 0 THEN NOW() ELSE orders_map.created_at END
+                       WHERE orders_map.lead_id = 0";
+    } else {
+        $reserveSql = "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at)
+                       VALUES(:code, :order_id, 0, :total_price, NOW())
+                       ON DUPLICATE KEY UPDATE
+                       kaspi_order_id = IF(orders_map.lead_id = 0, VALUES(kaspi_order_id), orders_map.kaspi_order_id),
+                       total_price = IF(orders_map.lead_id = 0, VALUES(total_price), orders_map.total_price),
+                       lead_id = IF(orders_map.lead_id = 0, 0, orders_map.lead_id),
+                       created_at = IF(orders_map.lead_id = 0, NOW(), orders_map.created_at)";
+    }
+    $stmtReserve = $pdo->prepare($reserveSql);
+    $stmtReserve->execute([
+        ':code' => $code,
+        ':order_id' => (string)$orderId,
+        ':total_price' => $price,
+    ]);
+    if ($stmtReserve->rowCount() === 0) {
+        Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
+        continue;
+    }
 
     $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
     $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
@@ -173,7 +199,6 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
     // create lead
     $leadName = 'Kaspi Order '.$code;
-    $price = (int) ($attrs['totalPrice'] ?? 0);
     $leadCustomFields = [];
     if ($orderCodeFieldId) {
         $leadCustomFields[] = [
@@ -214,13 +239,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     // store map
-    if ($row) {
-        $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
-    } else {
-        $stmt = $pdo->prepare(
-            "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at) VALUES(:c,:o,:l,:p, NOW())"
-        );
-    }
+    $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
     $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
 
     // add items
