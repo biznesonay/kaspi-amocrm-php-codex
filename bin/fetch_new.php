@@ -243,9 +243,10 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
 
     // add items
-    $entries = $kaspi->getOrderEntries($orderId);
     $lines = [];
-    foreach ($entries as $e) {
+    $hasEntries = false;
+    foreach ($kaspi->getOrderEntries($orderId) as $e) {
+        $hasEntries = true;
         $eAttrs = $e['attributes'] ?? [];
         $qty = (int) ($eAttrs['quantity'] ?? 1);
         $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
@@ -268,10 +269,12 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
     }
     // summary note
-    if ($lines) {
+    if ($hasEntries && $lines) {
         $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
         foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
         $amo->addNote($leadId, $text);
+    } elseif (!$hasEntries) {
+        Logger::info('Order has no entries', ['order_id' => $orderId, 'code' => $code]);
     }
 
     $created++;
