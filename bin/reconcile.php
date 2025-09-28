@@ -8,6 +8,7 @@ Logger::info('Reconcile orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
+$productCache = [];
 
 $catalogId  = (int) env('AMO_CATALOG_ID', '0');
 
@@ -63,9 +64,11 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         foreach ($kaspi->getOrderEntries($orderId) as $e) {
             $hasEntries = true;
             $eAttrs = $e['attributes'] ?? [];
+            if (!is_array($eAttrs)) {
+                $eAttrs = [];
+            }
             $qty = (int) ($eAttrs['quantity'] ?? 1);
-            $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
-            $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
+            [$title, $sku] = resolveOrderEntryProductDetails($kaspi, $e, $productCache);
             $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
 
             $found = $amo->findCatalogElement($catalogId, $sku ?: $title);

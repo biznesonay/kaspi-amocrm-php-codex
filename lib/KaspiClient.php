@@ -89,4 +89,41 @@ final class KaspiClient {
             }
         }
     }
+
+    public function getOrderEntryProduct(string $entryId): array {
+        $entryId = trim($entryId);
+        if ($entryId === '') {
+            throw new \InvalidArgumentException('Entry ID is empty');
+        }
+
+        $response = $this->request('GET', "/orderentries/{$entryId}/product");
+
+        if (isset($response['errors'])) {
+            $errors = $response['errors'];
+            if (is_array($errors) && $errors) {
+                $messages = [];
+                foreach ($errors as $error) {
+                    if (!is_array($error)) {
+                        $messages[] = (string) $error;
+                        continue;
+                    }
+                    $detail = trim((string) ($error['detail'] ?? ''));
+                    $title = trim((string) ($error['title'] ?? ''));
+                    $messages[] = $detail !== '' ? $detail : $title;
+                }
+                $messages = array_values(array_filter($messages, static fn($v) => $v !== ''));
+                if ($messages) {
+                    throw new RuntimeException('Kaspi product response error: '.implode('; ', $messages));
+                }
+            }
+            throw new RuntimeException('Kaspi product response contains errors');
+        }
+
+        $data = $response['data'] ?? null;
+        if (!is_array($data)) {
+            throw new RuntimeException('Kaspi product response missing data section');
+        }
+
+        return $data;
+    }
 }

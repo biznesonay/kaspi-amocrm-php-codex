@@ -80,6 +80,7 @@ Logger::info('Fetch new orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
+$productCache = [];
 
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
 $previousWatermark = $watermark;
@@ -322,9 +323,11 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         foreach ($kaspi->getOrderEntries($orderId) as $e) {
             $hasEntries = true;
             $eAttrs = $e['attributes'] ?? [];
+            if (!is_array($eAttrs)) {
+                $eAttrs = [];
+            }
             $qty = (int) ($eAttrs['quantity'] ?? 1);
-            $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
-            $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
+            [$title, $sku] = resolveOrderEntryProductDetails($kaspi, $e, $productCache);
             $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
             $lines[] = [$title, $sku, $qty, $priceItem];
 
