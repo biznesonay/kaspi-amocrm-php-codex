@@ -185,6 +185,10 @@ final class AmoClient {
         return $this->request('PATCH', '/api/v4/leads', [$fields]);
     }
 
+    public function deleteLead(int $id): void {
+        $this->request('DELETE', "/api/v4/leads/{$id}");
+    }
+
     public function linkLeadToCatalogElement(int $leadId, int $catalogId, int $elementId, int $qty): void {
         $payload = [ [ 'to_entity_id' => $elementId, 'to_entity_type' => 'catalog_elements',
                        'metadata' => ['quantity' => $qty, 'catalog_id' => $catalogId] ] ];
