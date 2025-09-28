@@ -58,7 +58,6 @@ Logger::info('Fetch new orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
-$dbDriver = env('DB_DRIVER', 'mysql');
 
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
 $previousWatermark = $watermark;
@@ -112,169 +111,217 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     $price = (int) ($attrs['totalPrice'] ?? 0);
+    $processingToken = bin2hex(random_bytes(16));
+    $transactionStarted = false;
 
-    // try to reserve order processing to avoid duplicates
-    if ($dbDriver === 'pgsql') {
-        $reserveSql = "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at)
-                       VALUES(:code, :order_id, 0, :total_price, NOW())
-                       ON CONFLICT (order_code) DO UPDATE
-                       SET kaspi_order_id = EXCLUDED.kaspi_order_id,
-                           total_price = EXCLUDED.total_price,
-                           created_at = CASE WHEN orders_map.lead_id = 0 THEN NOW() ELSE orders_map.created_at END
-                       WHERE orders_map.lead_id = 0";
-    } else {
-        $reserveSql = "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at)
-                       VALUES(:code, :order_id, 0, :total_price, NOW())
-                       ON DUPLICATE KEY UPDATE
-                       kaspi_order_id = IF(orders_map.lead_id = 0, VALUES(kaspi_order_id), orders_map.kaspi_order_id),
-                       total_price = IF(orders_map.lead_id = 0, VALUES(total_price), orders_map.total_price),
-                       lead_id = IF(orders_map.lead_id = 0, 0, orders_map.lead_id),
-                       created_at = IF(orders_map.lead_id = 0, NOW(), orders_map.created_at)";
-    }
-    $stmtReserve = $pdo->prepare($reserveSql);
-    $stmtReserve->execute([
-        ':code' => $code,
-        ':order_id' => (string)$orderId,
-        ':total_price' => $price,
-    ]);
-    if ($stmtReserve->rowCount() === 0) {
-        Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
-        continue;
-    }
+    try {
+        if (!$pdo->beginTransaction()) {
+            Logger::error('Failed to start transaction for order', ['code' => $code]);
+            continue;
+        }
+        $transactionStarted = true;
 
-    $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
-    $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
-    $deliveryAddress = formatKaspiDeliveryAddress($attrs);
+        $stmtSelect = $pdo->prepare(
+            'SELECT lead_id, processing_token FROM orders_map WHERE order_code = :code FOR UPDATE'
+        );
+        $stmtSelect->execute([':code' => $code]);
+        $existing = $stmtSelect->fetch();
 
-    // find or create contact
-    $contactId = null;
-    $foundContact = null;
-    if ($phone) {
-        $foundContact = $amo->findContactByQuery($phone);
-        if ($foundContact) $contactId = (int)$foundContact['id'];
-    }
-    if (!$contactId) {
-        $first = $attrs['customer']['firstName'] ?? ($attrs['firstName'] ?? 'Kaspi');
-        $last  = $attrs['customer']['lastName']  ?? ($attrs['lastName'] ?? 'Customer');
-        $contactCustomFields = [];
+        if ($existing === false) {
+            try {
+                $stmtInsert = $pdo->prepare(
+                    'INSERT INTO orders_map (order_code, kaspi_order_id, lead_id, total_price, created_at, processing_token, processing_at) ' .
+                    'VALUES (:code, :order_id, 0, :total_price, NOW(), :token, NOW())'
+                );
+                $stmtInsert->execute([
+                    ':code' => $code,
+                    ':order_id' => (string) $orderId,
+                    ':total_price' => $price,
+                    ':token' => $processingToken,
+                ]);
+            } catch (PDOException $e) {
+                $pdo->rollBack();
+                $transactionStarted = false;
+                Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
+                continue;
+            }
+        } else {
+            if ((int) ($existing['lead_id'] ?? 0) > 0) {
+                $pdo->rollBack();
+                $transactionStarted = false;
+                Logger::info('Order already linked with a lead, skip', ['code' => $code]);
+                continue;
+            }
+
+            $foreignToken = trim((string) ($existing['processing_token'] ?? ''));
+            if ($foreignToken !== '' && $foreignToken !== $processingToken) {
+                $pdo->rollBack();
+                $transactionStarted = false;
+                Logger::info('Order is already being processed by another worker, skip lead creation', ['code' => $code]);
+                continue;
+            }
+
+            $stmtUpdateReserve = $pdo->prepare(
+                'UPDATE orders_map ' .
+                'SET kaspi_order_id = :order_id, total_price = :total_price, processing_token = :token, processing_at = NOW() ' .
+                'WHERE order_code = :code'
+            );
+            $stmtUpdateReserve->execute([
+                ':order_id' => (string) $orderId,
+                ':total_price' => $price,
+                ':token' => $processingToken,
+                ':code' => $code,
+            ]);
+        }
+
+        $phoneRaw = $attrs['customer']['cellPhone'] ?? ($attrs['cellPhone'] ?? '');
+        $phone = $phoneRaw ? normalizePhone((string)$phoneRaw) : '';
+        $deliveryAddress = formatKaspiDeliveryAddress($attrs);
+
+        // find or create contact
+        $contactId = null;
+        $foundContact = null;
         if ($phone) {
-            $contactCustomFields[] = [
-                'field_code' => 'PHONE',
-                'values' => [['value' => $phone]],
+            $foundContact = $amo->findContactByQuery($phone);
+            if ($foundContact) $contactId = (int)$foundContact['id'];
+        }
+        if (!$contactId) {
+            $first = $attrs['customer']['firstName'] ?? ($attrs['firstName'] ?? 'Kaspi');
+            $last  = $attrs['customer']['lastName']  ?? ($attrs['lastName'] ?? 'Customer');
+            $contactCustomFields = [];
+            if ($phone) {
+                $contactCustomFields[] = [
+                    'field_code' => 'PHONE',
+                    'values' => [['value' => $phone]],
+                ];
+            }
+            if ($contactAddressFieldId && $deliveryAddress) {
+                $contactCustomFields[] = [
+                    'field_id' => $contactAddressFieldId,
+                    'values' => [['value' => $deliveryAddress]],
+                ];
+            }
+            $contactPayload = [amoBuildContactPayload(
+                (string)$first,
+                (string)$last,
+                $respUserId ?: null,
+                $contactCustomFields,
+                []
+            )];
+            $contactRes = $amo->createContacts($contactPayload);
+            $createdContact = $contactRes['_embedded']['contacts'][0] ?? null;
+            $contactId = $createdContact ? (int)$createdContact['id'] : null;
+        } elseif ($contactAddressFieldId && $deliveryAddress && $foundContact) {
+            $existingAddress = '';
+            $cfValues = $foundContact['custom_fields_values'] ?? [];
+            foreach ($cfValues as $cf) {
+                if ((int)($cf['field_id'] ?? 0) !== $contactAddressFieldId) continue;
+                $existingAddress = trim((string)($cf['values'][0]['value'] ?? ''));
+                break;
+            }
+            if ($existingAddress !== $deliveryAddress) {
+                $amo->updateContact($contactId, [
+                    'custom_fields_values' => [[
+                        'field_id' => $contactAddressFieldId,
+                        'values' => [['value' => $deliveryAddress]],
+                    ]],
+                ]);
+            }
+        }
+
+        // create lead
+        $leadName = 'Kaspi Order '.$code;
+        $leadCustomFields = [];
+        if ($orderCodeFieldId) {
+            $leadCustomFields[] = [
+                'field_id' => $orderCodeFieldId,
+                'values' => [['value' => $code]],
             ];
         }
-        if ($contactAddressFieldId && $deliveryAddress) {
-            $contactCustomFields[] = [
-                'field_id' => $contactAddressFieldId,
+        if ($leadDeliveryAddressFieldId && $deliveryAddress) {
+            $leadCustomFields[] = [
+                'field_id' => $leadDeliveryAddressFieldId,
                 'values' => [['value' => $deliveryAddress]],
             ];
         }
-        $contactPayload = [amoBuildContactPayload(
-            (string)$first,
-            (string)$last,
+        if ($leadOrderDateFieldId && $orderCreationDateIso) {
+            $leadCustomFields[] = [
+                'field_id' => $leadOrderDateFieldId,
+                'values' => [['value' => $orderCreationDateIso]],
+            ];
+        }
+        $lead = amoBuildLeadPayload(
+            $leadName,
+            $price,
+            $pipelineId ?: null,
+            $statusId ?: null,
             $respUserId ?: null,
-            $contactCustomFields,
-            []
-        )];
-        $contactRes = $amo->createContacts($contactPayload);
-        $createdContact = $contactRes['_embedded']['contacts'][0] ?? null;
-        $contactId = $createdContact ? (int)$createdContact['id'] : null;
-    } elseif ($contactAddressFieldId && $deliveryAddress && $foundContact) {
-        $existingAddress = '';
-        $cfValues = $foundContact['custom_fields_values'] ?? [];
-        foreach ($cfValues as $cf) {
-            if ((int)($cf['field_id'] ?? 0) !== $contactAddressFieldId) continue;
-            $existingAddress = trim((string)($cf['values'][0]['value'] ?? ''));
-            break;
+            $leadCustomFields,
+            $contactId ? [['id' => $contactId]] : [],
+            [
+                ['name' => 'Kaspi'],
+                ['name' => 'Marketplace'],
+            ]
+        );
+        $leadRes = $amo->createLeads([$lead]);
+        $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
+        if ($leadId <= 0) {
+            $pdo->rollBack();
+            $transactionStarted = false;
+            Logger::error('Lead creation failed', ['code' => $code]);
+            continue;
         }
-        if ($existingAddress !== $deliveryAddress) {
-            $amo->updateContact($contactId, [
-                'custom_fields_values' => [[
-                    'field_id' => $contactAddressFieldId,
-                    'values' => [['value' => $deliveryAddress]],
-                ]],
-            ]);
-        }
-    }
 
-    // create lead
-    $leadName = 'Kaspi Order '.$code;
-    $leadCustomFields = [];
-    if ($orderCodeFieldId) {
-        $leadCustomFields[] = [
-            'field_id' => $orderCodeFieldId,
-            'values' => [['value' => $code]],
-        ];
-    }
-    if ($leadDeliveryAddressFieldId && $deliveryAddress) {
-        $leadCustomFields[] = [
-            'field_id' => $leadDeliveryAddressFieldId,
-            'values' => [['value' => $deliveryAddress]],
-        ];
-    }
-    if ($leadOrderDateFieldId && $orderCreationDateIso) {
-        $leadCustomFields[] = [
-            'field_id' => $leadOrderDateFieldId,
-            'values' => [['value' => $orderCreationDateIso]],
-        ];
-    }
-    $lead = amoBuildLeadPayload(
-        $leadName,
-        $price,
-        $pipelineId ?: null,
-        $statusId ?: null,
-        $respUserId ?: null,
-        $leadCustomFields,
-        $contactId ? [['id' => $contactId]] : [],
-        [
-            ['name' => 'Kaspi'],
-            ['name' => 'Marketplace'],
-        ]
-    );
-    $leadRes = $amo->createLeads([$lead]);
-    $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
-    if ($leadId <= 0) {
-        Logger::error('Lead creation failed', ['code'=>$code]);
+        // add items
+        $lines = [];
+        $hasEntries = false;
+        foreach ($kaspi->getOrderEntries($orderId) as $e) {
+            $hasEntries = true;
+            $eAttrs = $e['attributes'] ?? [];
+            $qty = (int) ($eAttrs['quantity'] ?? 1);
+            $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
+            $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
+            $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
+            $lines[] = [$title, $sku, $qty, $priceItem];
+
+            if ($catalogId > 0) {
+                // find or create catalog element by SKU or title
+                $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
+                if (!$found) {
+                    $cf = [];
+                    if ($sku) $cf[] = ['field_code'=>'SKU','values'=>[['value'=>$sku]]];
+                    if ($priceItem) $cf[] = ['field_code'=>'PRICE','values'=>[['value'=>$priceItem]]];
+                    $found = $amo->createCatalogElement($catalogId, $title, $cf);
+                }
+                if ($found && isset($found['id'])) {
+                    $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
+                }
+            }
+        }
+        // summary note
+        if ($hasEntries && $lines) {
+            $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
+            foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
+            $amo->addNote($leadId, $text);
+        } elseif (!$hasEntries) {
+            Logger::info('Order has no entries', ['order_id' => $orderId, 'code' => $code]);
+        }
+
+        // store map
+        $stmt = $pdo->prepare('UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p, processing_token=NULL, processing_at=NULL WHERE order_code=:c');
+        $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
+
+        $pdo->commit();
+        $transactionStarted = false;
+    } catch (Throwable $e) {
+        if ($transactionStarted && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        Logger::error('Failed to process order', [
+            'code' => $code,
+            'error' => $e->getMessage(),
+        ]);
         continue;
-    }
-
-    // store map
-    $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
-    $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
-
-    // add items
-    $lines = [];
-    $hasEntries = false;
-    foreach ($kaspi->getOrderEntries($orderId) as $e) {
-        $hasEntries = true;
-        $eAttrs = $e['attributes'] ?? [];
-        $qty = (int) ($eAttrs['quantity'] ?? 1);
-        $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
-        $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
-        $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
-        $lines[] = [$title, $sku, $qty, $priceItem];
-
-        if ($catalogId > 0) {
-            // find or create catalog element by SKU or title
-            $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
-            if (!$found) {
-                $cf = [];
-                if ($sku) $cf[] = ['field_code'=>'SKU','values'=>[['value'=>$sku]]];
-                if ($priceItem) $cf[] = ['field_code'=>'PRICE','values'=>[['value'=>$priceItem]]];
-                $found = $amo->createCatalogElement($catalogId, $title, $cf);
-            }
-            if ($found && isset($found['id'])) {
-                $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
-            }
-        }
-    }
-    // summary note
-    if ($hasEntries && $lines) {
-        $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
-        foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
-        $amo->addNote($leadId, $text);
-    } elseif (!$hasEntries) {
-        Logger::info('Order has no entries', ['order_id' => $orderId, 'code' => $code]);
     }
 
     $created++;
