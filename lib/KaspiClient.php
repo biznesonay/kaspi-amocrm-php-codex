@@ -68,8 +68,25 @@ final class KaspiClient {
         }
     }
 
-    public function getOrderEntries(string $orderId): array {
-        $data = $this->request('GET', "/orders/{$orderId}/entries");
-        return $data['data'] ?? [];
+    public function getOrderEntries(string $orderId, int $pageSize = 100): iterable {
+        $page = 0;
+        while (true) {
+            $query = [
+                'page[number]' => $page,
+                'page[size]' => $pageSize,
+            ];
+            $data = $this->request('GET', "/orders/{$orderId}/entries", $query);
+            $items = $data['data'] ?? [];
+            if (!$items) {
+                break;
+            }
+            foreach ($items as $item) {
+                yield $item;
+            }
+            $page++;
+            if (count($items) < $pageSize) {
+                break;
+            }
+        }
     }
 }

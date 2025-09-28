@@ -59,8 +59,9 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
     // Refresh entries (re-link quantities)
     if ($catalogId > 0) {
-        $entries = $kaspi->getOrderEntries($orderId);
-        foreach ($entries as $e) {
+        $hasEntries = false;
+        foreach ($kaspi->getOrderEntries($orderId) as $e) {
+            $hasEntries = true;
             $eAttrs = $e['attributes'] ?? [];
             $qty = (int) ($eAttrs['quantity'] ?? 1);
             $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
@@ -77,6 +78,9 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             if ($found && isset($found['id'])) {
                 $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
             }
+        }
+        if (!$hasEntries) {
+            Logger::info('Order has no entries during reconcile', ['order_id' => $orderId, 'code' => $code]);
         }
     }
 
