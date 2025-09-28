@@ -171,88 +171,127 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
     }
 
-    // create lead
-    $leadName = 'Kaspi Order '.$code;
-    $price = (int) ($attrs['totalPrice'] ?? 0);
-    $leadCustomFields = [];
-    if ($orderCodeFieldId) {
-        $leadCustomFields[] = [
-            'field_id' => $orderCodeFieldId,
-            'values' => [['value' => $code]],
-        ];
-    }
-    if ($leadDeliveryAddressFieldId && $deliveryAddress) {
-        $leadCustomFields[] = [
-            'field_id' => $leadDeliveryAddressFieldId,
-            'values' => [['value' => $deliveryAddress]],
-        ];
-    }
-    if ($leadOrderDateFieldId && $orderCreationDateIso) {
-        $leadCustomFields[] = [
-            'field_id' => $leadOrderDateFieldId,
-            'values' => [['value' => $orderCreationDateIso]],
-        ];
-    }
-    $lead = amoBuildLeadPayload(
-        $leadName,
-        $price,
-        $pipelineId ?: null,
-        $statusId ?: null,
-        $respUserId ?: null,
-        $leadCustomFields,
-        $contactId ? [['id' => $contactId]] : [],
-        [
-            ['name' => 'Kaspi'],
-            ['name' => 'Marketplace'],
-        ]
-    );
-    $leadRes = $amo->createLeads([$lead]);
-    $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
-    if ($leadId <= 0) {
-        Logger::error('Lead creation failed', ['code'=>$code]);
-        continue;
-    }
-
-    // store map
-    if ($row) {
-        $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
-    } else {
-        $stmt = $pdo->prepare(
-            "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at) VALUES(:c,:o,:l,:p, NOW())"
+    $leadId = 0;
+    $pdo->beginTransaction();
+    try {
+        // create lead
+        $leadName = 'Kaspi Order '.$code;
+        $price = (int) ($attrs['totalPrice'] ?? 0);
+        $leadCustomFields = [];
+        if ($orderCodeFieldId) {
+            $leadCustomFields[] = [
+                'field_id' => $orderCodeFieldId,
+                'values' => [['value' => $code]],
+            ];
+        }
+        if ($leadDeliveryAddressFieldId && $deliveryAddress) {
+            $leadCustomFields[] = [
+                'field_id' => $leadDeliveryAddressFieldId,
+                'values' => [['value' => $deliveryAddress]],
+            ];
+        }
+        if ($leadOrderDateFieldId && $orderCreationDateIso) {
+            $leadCustomFields[] = [
+                'field_id' => $leadOrderDateFieldId,
+                'values' => [['value' => $orderCreationDateIso]],
+            ];
+        }
+        $lead = amoBuildLeadPayload(
+            $leadName,
+            $price,
+            $pipelineId ?: null,
+            $statusId ?: null,
+            $respUserId ?: null,
+            $leadCustomFields,
+            $contactId ? [['id' => $contactId]] : [],
+            [
+                ['name' => 'Kaspi'],
+                ['name' => 'Marketplace'],
+            ]
         );
-    }
-    $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
+        $leadRes = $amo->createLeads([$lead]);
+        $leadId = (int) ($leadRes['_embedded']['leads'][0]['id'] ?? 0);
+        if ($leadId <= 0) {
+            throw new RuntimeException('Lead creation failed');
+        }
 
-    // add items
-    $entries = $kaspi->getOrderEntries($orderId);
-    $lines = [];
-    foreach ($entries as $e) {
-        $eAttrs = $e['attributes'] ?? [];
-        $qty = (int) ($eAttrs['quantity'] ?? 1);
-        $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
-        $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
-        $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
-        $lines[] = [$title, $sku, $qty, $priceItem];
+        // store map
+        if ($row) {
+            $stmt = $pdo->prepare("UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p WHERE order_code=:c");
+        } else {
+            $stmt = $pdo->prepare(
+                "INSERT INTO orders_map(order_code, kaspi_order_id, lead_id, total_price, created_at) VALUES(:c,:o,:l,:p, NOW())"
+            );
+        }
+        $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
 
-        if ($catalogId > 0) {
-            // find or create catalog element by SKU or title
-            $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
-            if (!$found) {
-                $cf = [];
-                if ($sku) $cf[] = ['field_code'=>'SKU','values'=>[['value'=>$sku]]];
-                if ($priceItem) $cf[] = ['field_code'=>'PRICE','values'=>[['value'=>$priceItem]]];
-                $found = $amo->createCatalogElement($catalogId, $title, $cf);
-            }
-            if ($found && isset($found['id'])) {
-                $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
+        // add items
+        $entries = $kaspi->getOrderEntries($orderId);
+        $lines = [];
+        foreach ($entries as $e) {
+            $eAttrs = $e['attributes'] ?? [];
+            $qty = (int) ($eAttrs['quantity'] ?? 1);
+            $title = (string) ($eAttrs['productName'] ?? ($eAttrs['name'] ?? 'Товар'));
+            $sku = (string) ($eAttrs['productCode'] ?? ($eAttrs['code'] ?? $title));
+            $priceItem = (int) ($eAttrs['basePrice'] ?? ($eAttrs['totalPrice'] ?? 0));
+            $lines[] = [$title, $sku, $qty, $priceItem];
+
+            if ($catalogId > 0) {
+                // find or create catalog element by SKU or title
+                $found = $amo->findCatalogElement($catalogId, $sku ?: $title);
+                if (!$found) {
+                    $cf = [];
+                    if ($sku) $cf[] = ['field_code'=>'SKU','values'=>[['value'=>$sku]]];
+                    if ($priceItem) $cf[] = ['field_code'=>'PRICE','values'=>[['value'=>$priceItem]]];
+                    $found = $amo->createCatalogElement($catalogId, $title, $cf);
+                }
+                if ($found && isset($found['id'])) {
+                    $amo->linkLeadToCatalogElement($leadId, $catalogId, (int)$found['id'], max(1,$qty));
+                }
             }
         }
-    }
-    // summary note
-    if ($lines) {
-        $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
-        foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
-        $amo->addNote($leadId, $text);
+        // summary note
+        if ($lines) {
+            $text = "Позиции заказа:\nName | SKU | Qty | Price\n";
+            foreach ($lines as [$n,$s,$q,$p]) { $text .= "{$n} | {$s} | {$q} | {$p}\n"; }
+            $amo->addNote($leadId, $text);
+        }
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+
+        if ($leadId > 0) {
+            try {
+                $amo->deleteLead($leadId);
+            } catch (Throwable $cleanupError) {
+                Logger::error('Failed to delete lead after processing error', [
+                    'code' => $code,
+                    'lead_id' => $leadId,
+                    'error' => $cleanupError->getMessage(),
+                ]);
+                try {
+                    $amo->updateLead($leadId, [
+                        'name' => 'Kaspi Order '.$code.' (ошибка синхронизации)',
+                    ]);
+                } catch (Throwable $updateError) {
+                    Logger::error('Failed to update lead after deletion failure', [
+                        'code' => $code,
+                        'lead_id' => $leadId,
+                        'error' => $updateError->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        Logger::error('Failed to process Kaspi order', [
+            'code' => $code,
+            'exception' => $e->getMessage(),
+            'exception_class' => get_class($e),
+        ]);
+        continue;
     }
 
     $created++;
