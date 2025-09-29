@@ -103,6 +103,10 @@ $orderCodeFieldId = (int) env('AMO_LEAD_ORDER_CODE_FIELD_ID', '0');
 $contactAddressFieldId = (int) env('AMO_CONTACT_ADDRESS_FIELD_ID', '0');
 $leadDeliveryAddressFieldId = (int) env('AMO_LEAD_DELIVERY_ADDRESS_FIELD_ID', '0');
 $leadOrderDateFieldId = (int) env('AMO_LEAD_ORDER_DATE_FIELD_ID', '0');
+$processingTimeoutSeconds = (int) env('ORDER_PROCESSING_TIMEOUT_SECONDS', '300');
+if ($processingTimeoutSeconds <= 0) {
+    $processingTimeoutSeconds = 300;
+}
 $projectTimezone = new DateTimeZone(date_default_timezone_get());
 $utcTimezone = new DateTimeZone('UTC');
 
@@ -146,7 +150,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         $reservationTransactionStarted = true;
 
         $stmtSelect = $pdo->prepare(
-            'SELECT lead_id, processing_token FROM orders_map WHERE order_code = :code FOR UPDATE'
+            'SELECT lead_id, processing_token, processing_at FROM orders_map WHERE order_code = :code FOR UPDATE'
         );
         $stmtSelect->execute([':code' => $code]);
         $existing = $stmtSelect->fetch();
@@ -179,10 +183,35 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
             $foreignToken = trim((string) ($existing['processing_token'] ?? ''));
             if ($foreignToken !== '' && $foreignToken !== $processingToken) {
-                $pdo->rollBack();
-                $reservationTransactionStarted = false;
-                Logger::info('Order is already being processed by another worker, skip lead creation', ['code' => $code]);
-                continue;
+                $lockedAtRaw = $existing['processing_at'] ?? null;
+                $lockedAtTs = is_string($lockedAtRaw) && $lockedAtRaw !== '' ? strtotime($lockedAtRaw) : false;
+                $nowTs = time();
+                $lockExpired = !$lockedAtTs || ($nowTs - $lockedAtTs) >= $processingTimeoutSeconds;
+
+                if ($lockExpired) {
+                    $stmtClearLock = $pdo->prepare(
+                        'UPDATE orders_map SET processing_token = NULL, processing_at = NULL WHERE order_code = :code'
+                    );
+                    $stmtClearLock->execute([':code' => $code]);
+
+                    Logger::info('Detected stale order processing lock, resetting', [
+                        'code' => $code,
+                        'previous_token' => $foreignToken,
+                        'processing_at' => $lockedAtRaw,
+                        'timeout_sec' => $processingTimeoutSeconds,
+                    ]);
+
+                    $foreignToken = '';
+                } else {
+                    $pdo->rollBack();
+                    $reservationTransactionStarted = false;
+                    Logger::info('Order is already being processed by another worker, skip lead creation', [
+                        'code' => $code,
+                        'processing_token' => $foreignToken,
+                        'processing_at' => $lockedAtRaw,
+                    ]);
+                    continue;
+                }
             }
 
             $stmtUpdateReserve = $pdo->prepare(
