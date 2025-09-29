@@ -80,6 +80,7 @@ Logger::info('Fetch new orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
+$statusMappingManager = new StatusMappingManager();
 $productCache = [];
 
 $watermark = (int) (Db::getSetting('last_creation_ms', '0') ?? '0');
@@ -138,6 +139,18 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     $price = (int) ($attrs['totalPrice'] ?? 0);
+    $kaspiState = '';
+    if (isset($attrs['state'])) {
+        $kaspiState = trim((string) $attrs['state']);
+    }
+    $defaultStatusId = $statusId ?: null;
+    $effectiveStatusId = $defaultStatusId;
+    if ($kaspiState !== '') {
+        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState);
+        if (is_int($mappedStatusId) && $mappedStatusId > 0) {
+            $effectiveStatusId = $mappedStatusId;
+        }
+    }
     $processingToken = bin2hex(random_bytes(16));
     $leadId = 0;
 
@@ -355,7 +368,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             $leadName,
             $price,
             $pipelineId ?: null,
-            $statusId ?: null,
+            $effectiveStatusId,
             $respUserId ?: null,
             $leadCustomFields,
             $contactId ? [['id' => $contactId]] : [],
@@ -408,8 +421,8 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         }
 
         // store map
-        $stmt = $pdo->prepare('UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p, processing_token=NULL, processing_at=NULL WHERE order_code=:c');
-        $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price]);
+        $stmt = $pdo->prepare('UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p, kaspi_status=:s, processing_token=NULL, processing_at=NULL WHERE order_code=:c');
+        $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price, ':s'=>$kaspiState !== '' ? $kaspiState : null]);
 
         $pdo->commit();
         $transactionStarted = false;
