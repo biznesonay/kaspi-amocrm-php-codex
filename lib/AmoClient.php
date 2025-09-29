@@ -219,15 +219,114 @@ final class AmoClient {
      * @return array<int, array<string, mixed>>
      */
     public function getPipelines(): array {
-        $response = $this->request('GET', '/api/v4/leads/pipelines');
-        if (!is_array($response)) {
-            return [];
+        $page   = 1;
+        $limit  = 50;
+        $result = [];
+
+        try {
+            while (true) {
+                $response = $this->request('GET', '/api/v4/leads/pipelines', null, [
+                    'page' => $page,
+                    'limit' => $limit,
+                    'with' => 'leads_statuses',
+                ]);
+
+                if (!is_array($response)) {
+                    Logger::error('amoCRM pipelines response is not an array', ['page' => $page, 'response_type' => gettype($response)]);
+                    break;
+                }
+
+                $embedded = $response['_embedded'] ?? null;
+                if (!is_array($embedded)) {
+                    Logger::error('amoCRM pipelines response missing _embedded', ['page' => $page, 'response' => $response]);
+                    break;
+                }
+
+                $pipelines = $embedded['pipelines'] ?? null;
+                if (!is_array($pipelines)) {
+                    Logger::error('amoCRM pipelines response missing pipelines array', ['page' => $page, 'embedded' => $embedded]);
+                    break;
+                }
+
+                foreach ($pipelines as $pipeline) {
+                    if (!is_array($pipeline)) {
+                        Logger::error('amoCRM pipeline item is not an array', ['page' => $page, 'item_type' => gettype($pipeline)]);
+                        continue;
+                    }
+
+                    $pipelineId = filter_var($pipeline['id'] ?? null, FILTER_VALIDATE_INT);
+                    $pipelineName = isset($pipeline['name']) ? (string) $pipeline['name'] : null;
+                    $pipelineSort = filter_var($pipeline['sort'] ?? null, FILTER_VALIDATE_INT);
+                    $pipelineColor = isset($pipeline['color']) ? (string) $pipeline['color'] : '';
+
+                    if ($pipelineId === false || $pipelineId === null || $pipelineName === null || $pipelineSort === false || $pipelineSort === null) {
+                        Logger::error('amoCRM pipeline item missing required fields', ['page' => $page, 'pipeline' => $pipeline]);
+                        continue;
+                    }
+
+                    $statusesRaw = $pipeline['_embedded']['statuses'] ?? $pipeline['statuses'] ?? null;
+                    if ($statusesRaw !== null && !is_array($statusesRaw)) {
+                        Logger::error('amoCRM pipeline statuses is not an array', ['pipeline_id' => $pipelineId, 'statuses_type' => gettype($statusesRaw)]);
+                        $statusesRaw = [];
+                    }
+
+                    $statuses = [];
+                    if (is_array($statusesRaw)) {
+                        foreach ($statusesRaw as $status) {
+                            if (!is_array($status)) {
+                                Logger::error('amoCRM status item is not an array', ['pipeline_id' => $pipelineId, 'status_type' => gettype($status)]);
+                                continue;
+                            }
+
+                            $statusId = filter_var($status['id'] ?? null, FILTER_VALIDATE_INT);
+                            $statusName = isset($status['name']) ? (string) $status['name'] : null;
+                            $statusSort = filter_var($status['sort'] ?? null, FILTER_VALIDATE_INT);
+                            $statusColor = isset($status['color']) ? (string) $status['color'] : '';
+
+                            if ($statusId === false || $statusId === null || $statusName === null || $statusSort === false || $statusSort === null) {
+                                Logger::error('amoCRM status item missing required fields', ['pipeline_id' => $pipelineId, 'status' => $status]);
+                                continue;
+                            }
+
+                            $statuses[] = [
+                                'id' => $statusId,
+                                'name' => $statusName,
+                                'sort' => $statusSort,
+                                'color' => $statusColor,
+                            ];
+                        }
+                    }
+
+                    usort($statuses, static function (array $a, array $b): int {
+                        return $a['sort'] <=> $b['sort'];
+                    });
+
+                    $result[] = [
+                        'id' => $pipelineId,
+                        'name' => $pipelineName,
+                        'sort' => $pipelineSort,
+                        'color' => $pipelineColor,
+                        'statuses' => $statuses,
+                    ];
+                }
+
+                $hasNext = isset($response['_links']['next']['href']);
+                if (!$hasNext) {
+                    break;
+                }
+
+                $page++;
+            }
+        } catch (Throwable $e) {
+            Logger::error('Failed to fetch amoCRM pipelines', ['page' => $page, 'error' => $e->getMessage()]);
+            throw $e;
         }
-        $embedded = $response['_embedded'] ?? [];
-        if (!is_array($embedded)) {
-            return [];
-        }
-        $pipelines = $embedded['pipelines'] ?? [];
-        return is_array($pipelines) ? array_values($pipelines) : [];
+
+        usort($result, static function (array $a, array $b): int {
+            $sortCompare = $a['sort'] <=> $b['sort'];
+            return $sortCompare !== 0 ? $sortCompare : ($a['id'] <=> $b['id']);
+        });
+
+        return $result;
     }
 }
