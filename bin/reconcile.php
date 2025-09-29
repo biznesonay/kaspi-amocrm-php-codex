@@ -12,6 +12,7 @@ $statusMappingManager = new StatusMappingManager();
 $productCache = [];
 
 $catalogId  = (int) env('AMO_CATALOG_ID', '0');
+$pipelineId = (int) env('AMO_PIPELINE_ID', '0');
 
 $lastCheck = (int) (Db::getSetting('last_check_ms', '0') ?? '0');
 $nowMs = (int) (microtime(true) * 1000);
@@ -45,15 +46,10 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $storedKaspiStatus = isset($row['kaspi_status']) ? trim((string)$row['kaspi_status']) : '';
 
     if ($kaspiState !== '' && $kaspiState !== $storedKaspiStatus) {
-        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState);
+        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState, $pipelineId);
         if (is_int($mappedStatusId) && $mappedStatusId > 0) {
             try {
                 $amo->updateLead($leadId, ['status_id' => $mappedStatusId]);
-                $stmtUpdateStatus = $pdo->prepare('UPDATE orders_map SET kaspi_status = :status WHERE order_code = :code');
-                $stmtUpdateStatus->execute([
-                    ':status' => $kaspiState,
-                    ':code' => $code,
-                ]);
                 Logger::info('Order status changed', [
                     'lead_id' => $leadId,
                     'order_code' => $code,
@@ -69,6 +65,20 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                     'exception' => get_class($e),
                 ]);
             }
+        }
+        try {
+            $stmtUpdateStatus = $pdo->prepare('UPDATE orders_map SET kaspi_status = :status WHERE order_code = :code');
+            $stmtUpdateStatus->execute([
+                ':status' => $kaspiState,
+                ':code' => $code,
+            ]);
+        } catch (Throwable $e) {
+            Logger::error('Failed to persist Kaspi status', [
+                'order_code' => $code,
+                'kaspi_status' => $kaspiState,
+                'error' => $e->getMessage(),
+                'exception' => get_class($e),
+            ]);
         }
     }
 

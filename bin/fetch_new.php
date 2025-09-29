@@ -139,14 +139,14 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     }
 
     $price = (int) ($attrs['totalPrice'] ?? 0);
-    $kaspiState = '';
-    if (isset($attrs['state'])) {
-        $kaspiState = trim((string) $attrs['state']);
+    $kaspiOrderStatus = trim((string) ($attrs['state'] ?? 'NEW'));
+    if ($kaspiOrderStatus === '') {
+        $kaspiOrderStatus = 'NEW';
     }
     $defaultStatusId = $statusId ?: null;
     $effectiveStatusId = $defaultStatusId;
-    if ($kaspiState !== '') {
-        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState);
+    if ($kaspiOrderStatus !== '') {
+        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiOrderStatus, $pipelineId);
         if (is_int($mappedStatusId) && $mappedStatusId > 0) {
             $effectiveStatusId = $mappedStatusId;
         }
@@ -422,7 +422,13 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
         // store map
         $stmt = $pdo->prepare('UPDATE orders_map SET kaspi_order_id=:o, lead_id=:l, total_price=:p, kaspi_status=:s, processing_token=NULL, processing_at=NULL WHERE order_code=:c');
-        $stmt->execute([':c'=>$code, ':o'=>$orderId, ':l'=>$leadId, ':p'=>$price, ':s'=>$kaspiState !== '' ? $kaspiState : null]);
+        $stmt->execute([
+            ':c' => $code,
+            ':o' => $orderId,
+            ':l' => $leadId,
+            ':p' => $price,
+            ':s' => $kaspiOrderStatus !== '' ? $kaspiOrderStatus : null,
+        ]);
 
         $pdo->commit();
         $transactionStarted = false;

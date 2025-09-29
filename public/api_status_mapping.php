@@ -94,14 +94,10 @@ if ($method === 'POST') {
                 $kaspiStatus = isset($payload['kaspi_status']) ? trim((string) $payload['kaspi_status']) : '';
                 $amoPipelineId = filter_var($payload['amo_pipeline_id'] ?? null, FILTER_VALIDATE_INT);
                 $amoStatusId = filter_var($payload['amo_status_id'] ?? null, FILTER_VALIDATE_INT);
-                $amoResponsible = $payload['amo_responsible_user_id'] ?? null;
-                $amoResponsibleId = null;
-                if ($amoResponsible !== null && $amoResponsible !== '') {
-                    $filteredResponsible = filter_var($amoResponsible, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-                    if ($filteredResponsible === false || $filteredResponsible === null) {
-                        respondError('Invalid amo_responsible_user_id', 400, ['value' => $amoResponsible]);
-                    }
-                    $amoResponsibleId = (int) $filteredResponsible;
+                $isActiveRaw = $payload['is_active'] ?? true;
+                $isActive = filter_var($isActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                if ($isActive === null) {
+                    respondError('is_active must be boolean', 400, ['value' => $isActiveRaw]);
                 }
                 if ($kaspiStatus === '') {
                     respondError('kaspi_status is required', 400, ['action' => $action]);
@@ -113,19 +109,21 @@ if ($method === 'POST') {
                     respondError('amo_status_id must be an integer', 400, ['value' => $payload['amo_status_id'] ?? null]);
                 }
 
-                $result = $manager->upsertMapping(
+                $id = $manager->upsertMapping(
                     $kaspiStatus,
                     (int) $amoPipelineId,
                     (int) $amoStatusId,
-                    $amoResponsibleId
+                    (bool) $isActive
                 );
+                $result = ['id' => $id];
                 break;
             case 'delete_mapping':
                 $id = filter_var($payload['id'] ?? null, FILTER_VALIDATE_INT);
                 if ($id === false || $id === null) {
                     respondError('id must be an integer', 400, ['action' => $action, 'value' => $payload['id'] ?? null]);
                 }
-                $result = $manager->deleteMapping((int) $id);
+                $deleted = $manager->deleteMapping((int) $id);
+                $result = ['deleted' => $deleted];
                 break;
             case 'toggle_mapping':
                 $id = filter_var($payload['id'] ?? null, FILTER_VALIDATE_INT);
@@ -138,10 +136,11 @@ if ($method === 'POST') {
                     respondError('is_active must be boolean', 400, ['value' => $isActiveRaw]);
                 }
                 if ($isActive) {
-                    $result = $manager->activateMapping((int) $id);
+                    $updated = $manager->activateMapping((int) $id);
                 } else {
-                    $result = $manager->deactivateMapping((int) $id);
+                    $updated = $manager->deactivateMapping((int) $id);
                 }
+                $result = ['updated' => $updated];
                 break;
             default:
                 respondError('Unknown action', 400, ['action' => $action, 'method' => 'POST']);
