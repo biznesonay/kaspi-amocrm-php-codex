@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS status_mapping (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  kaspi_status VARCHAR(64) NOT NULL,
+  amo_pipeline_id BIGINT NOT NULL,
+  amo_status_id BIGINT NOT NULL,
+  amo_responsible_user_id BIGINT DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY status_mapping_kaspi_status_unique (kaspi_status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
