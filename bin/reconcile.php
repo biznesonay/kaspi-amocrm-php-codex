@@ -8,6 +8,7 @@ Logger::info('Reconcile orders: start');
 $kaspi = new KaspiClient();
 $amo   = new AmoClient();
 $pdo   = Db::pdo();
+$statusMappingManager = new StatusMappingManager();
 $productCache = [];
 
 $catalogId  = (int) env('AMO_CATALOG_ID', '0');
@@ -33,12 +34,43 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     if (!$code) continue;
 
     // find mapping
-    $stmt = $pdo->prepare("SELECT lead_id, total_price FROM orders_map WHERE order_code=:c");
+    $stmt = $pdo->prepare("SELECT lead_id, total_price, kaspi_status FROM orders_map WHERE order_code=:c");
     $stmt->execute([':c'=>$code]);
     $row = $stmt->fetch();
     if (!$row) continue;
     $leadId = (int)$row['lead_id'];
     if ($leadId <= 0) continue;
+
+    $kaspiState = isset($attrs['state']) ? trim((string)$attrs['state']) : '';
+    $storedKaspiStatus = isset($row['kaspi_status']) ? trim((string)$row['kaspi_status']) : '';
+
+    if ($kaspiState !== '' && $kaspiState !== $storedKaspiStatus) {
+        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState);
+        if (is_int($mappedStatusId) && $mappedStatusId > 0) {
+            try {
+                $amo->updateLead($leadId, ['status_id' => $mappedStatusId]);
+                $stmtUpdateStatus = $pdo->prepare('UPDATE orders_map SET kaspi_status = :status WHERE order_code = :code');
+                $stmtUpdateStatus->execute([
+                    ':status' => $kaspiState,
+                    ':code' => $code,
+                ]);
+                Logger::info('Order status changed', [
+                    'lead_id' => $leadId,
+                    'order_code' => $code,
+                    'kaspi_status' => $kaspiState,
+                    'amo_status_id' => $mappedStatusId,
+                ]);
+            } catch (Throwable $e) {
+                Logger::error('Failed to update lead status', [
+                    'lead_id' => $leadId,
+                    'order_code' => $code,
+                    'kaspi_status' => $kaspiState,
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]);
+            }
+        }
+    }
 
     // Compare & update lead price if changed
     $sum = (int) ($attrs['totalPrice'] ?? 0);
