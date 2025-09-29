@@ -45,7 +45,7 @@ $manager = new StatusMappingManager();
 if ($method === 'GET') {
     $action = (string) ($_GET['action'] ?? '');
     if ($action === '') {
-        respondError('Missing action', 400, ['method' => 'GET']);
+        respondError('Missing action query parameter', 400, ['method' => 'GET']);
     }
 
     try {
@@ -64,7 +64,7 @@ if ($method === 'GET') {
                 $result = $amoClient->getPipelines();
                 break;
             default:
-                respondError('Unknown action', 400, ['action' => $action, 'method' => 'GET']);
+                respondError('Unknown action query parameter value', 400, ['action' => $action, 'method' => 'GET']);
         }
         respondSuccess($result);
     } catch (Throwable $e) {
@@ -77,15 +77,15 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
+    $action = (string) ($_GET['action'] ?? '');
+    if ($action === '') {
+        respondError('Missing action query parameter', 400, ['method' => 'POST']);
+    }
+
     $rawBody = file_get_contents('php://input');
     $payload = json_decode($rawBody ?: '[]', true);
     if (!is_array($payload)) {
         respondError('Invalid JSON body', 400, ['body' => $rawBody]);
-    }
-
-    $action = (string) ($payload['action'] ?? '');
-    if ($action === '') {
-        respondError('Missing action', 400, ['method' => 'POST']);
     }
 
     try {
@@ -97,7 +97,7 @@ if ($method === 'POST') {
                 $isActiveRaw = $payload['is_active'] ?? true;
                 $isActive = filter_var($isActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
                 if ($isActive === null) {
-                    respondError('is_active must be boolean', 400, ['value' => $isActiveRaw]);
+                    respondError('is_active must be a boolean value', 400, ['value' => $isActiveRaw]);
                 }
                 if ($kaspiStatus === '') {
                     respondError('kaspi_status is required', 400, ['action' => $action]);
@@ -118,32 +118,32 @@ if ($method === 'POST') {
                 $result = ['id' => $id];
                 break;
             case 'delete_mapping':
-                $id = filter_var($payload['id'] ?? null, FILTER_VALIDATE_INT);
+                $idRaw = $_GET['id'] ?? null;
+                $id = filter_var($idRaw, FILTER_VALIDATE_INT);
                 if ($id === false || $id === null) {
-                    respondError('id must be an integer', 400, ['action' => $action, 'value' => $payload['id'] ?? null]);
+                    respondError('id query parameter must be an integer', 400, ['action' => $action, 'value' => $idRaw]);
                 }
-                $deleted = $manager->deleteMapping((int) $id);
-                $result = ['deleted' => $deleted];
+                $result = $manager->deleteMapping((int) $id);
                 break;
             case 'toggle_mapping':
-                $id = filter_var($payload['id'] ?? null, FILTER_VALIDATE_INT);
+                $idRaw = $payload['id'] ?? null;
+                $id = filter_var($idRaw, FILTER_VALIDATE_INT);
                 if ($id === false || $id === null) {
-                    respondError('id must be an integer', 400, ['action' => $action, 'value' => $payload['id'] ?? null]);
+                    respondError('id in request body must be an integer', 400, ['action' => $action, 'value' => $idRaw]);
                 }
                 $isActiveRaw = $payload['is_active'] ?? null;
                 $isActive = filter_var($isActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
                 if ($isActive === null) {
-                    respondError('is_active must be boolean', 400, ['value' => $isActiveRaw]);
+                    respondError('is_active must be a boolean value', 400, ['value' => $isActiveRaw]);
                 }
                 if ($isActive) {
-                    $updated = $manager->activateMapping((int) $id);
+                    $result = $manager->activateMapping((int) $id);
                 } else {
-                    $updated = $manager->deactivateMapping((int) $id);
+                    $result = $manager->deactivateMapping((int) $id);
                 }
-                $result = ['updated' => $updated];
                 break;
             default:
-                respondError('Unknown action', 400, ['action' => $action, 'method' => 'POST']);
+                respondError('Unknown action query parameter value', 400, ['action' => $action, 'method' => 'POST']);
         }
         respondSuccess($result);
     } catch (Throwable $e) {
