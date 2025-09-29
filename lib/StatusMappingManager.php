@@ -8,6 +8,19 @@ require_once __DIR__.'/Logger.php';
  * Управляет сопоставлениями статусов Kaspi и amoCRM.
  */
 final class StatusMappingManager {
+    private const SUPPORTED_KASPI_STATUSES = [
+        'NEW',
+        'APPROVED_BY_BANK',
+        'ACCEPTED_BY_MERCHANT',
+        'COLLECTED',
+        'DELIVERY',
+        'DELIVERED',
+        'COMPLETED',
+        'RETURNED',
+        'CANCELLED_BY_CUSTOMER',
+        'CANCELLED_BY_MERCHANT',
+        'CANCELLED_BY_BANK',
+    ];
     private PDO $pdo;
     private bool $hasActiveColumn;
     /** @var array<string, bool> */
@@ -42,20 +55,28 @@ final class StatusMappingManager {
      * Возвращает сопоставление по статусу Kaspi.
      *
      * @param string $kaspiStatus Статус Kaspi.
+     * @param int    $pipelineId  ID воронки amoCRM.
      * @return array<string, mixed>|null
      */
-    public function getMapping(string $kaspiStatus): ?array {
+    public function getMapping(string $kaspiStatus, int $pipelineId): ?array {
         try {
-            $mapping = $this->fetchMappingByStatus($kaspiStatus);
+            $mapping = $this->fetchMapping($kaspiStatus, $pipelineId, false);
             if ($mapping === null) {
-                Logger::info('Kaspi status mapping not found', ['kaspi_status' => $kaspiStatus]);
+                Logger::info('Kaspi status mapping not found', [
+                    'kaspi_status' => $kaspiStatus,
+                    'amo_pipeline_id' => $pipelineId,
+                ]);
             } else {
-                Logger::info('Kaspi status mapping fetched', ['kaspi_status' => $kaspiStatus]);
+                Logger::info('Kaspi status mapping fetched', [
+                    'kaspi_status' => $kaspiStatus,
+                    'amo_pipeline_id' => $pipelineId,
+                ]);
             }
             return $mapping;
         } catch (PDOException $e) {
             Logger::error('Failed to fetch mapping by kaspi status', [
                 'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
@@ -66,39 +87,30 @@ final class StatusMappingManager {
      * Возвращает ID статуса amoCRM по статусу Kaspi (только активные сопоставления).
      *
      * @param string $kaspiStatus Статус Kaspi.
+     * @param int    $pipelineId  ID воронки amoCRM.
      * @return int|null
      */
-    public function getAmoStatusId(string $kaspiStatus): ?int {
+    public function getAmoStatusId(string $kaspiStatus, int $pipelineId): ?int {
         try {
-            $sql = 'SELECT amo_status_id FROM status_mapping WHERE kaspi_status = :kaspi_status';
-            $params = [':kaspi_status' => $kaspiStatus];
-            if ($this->hasActiveColumn) {
-                $sql .= ' AND is_active = :is_active';
-                $params[':is_active'] = true;
-            }
-            $stmt = $this->pdo->prepare($sql.' LIMIT 1');
-            foreach ($params as $key => $value) {
-                if ($key === ':is_active') {
-                    $stmt->bindValue($key, $value, PDO::PARAM_BOOL);
-                } else {
-                    $stmt->bindValue($key, $value);
-                }
-            }
-            $stmt->execute();
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            $amoStatusId = $row['amo_status_id'] ?? null;
-            if ($amoStatusId !== null) {
+            $mapping = $this->fetchMapping($kaspiStatus, $pipelineId, true);
+            if ($mapping !== null && isset($mapping['amo_status_id'])) {
+                $amoStatusId = (int) $mapping['amo_status_id'];
                 Logger::info('Fetched amo status id for Kaspi status', [
                     'kaspi_status' => $kaspiStatus,
-                    'amo_status_id' => (int) $amoStatusId,
+                    'amo_pipeline_id' => $pipelineId,
+                    'amo_status_id' => $amoStatusId,
                 ]);
-                return (int) $amoStatusId;
+                return $amoStatusId;
             }
-            Logger::info('No amo status id found for Kaspi status', ['kaspi_status' => $kaspiStatus]);
+            Logger::info('No amo status id found for Kaspi status', [
+                'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
+            ]);
             return null;
         } catch (PDOException $e) {
             Logger::error('Failed to fetch amo status id', [
                 'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
@@ -108,34 +120,29 @@ final class StatusMappingManager {
     /**
      * Создаёт или обновляет сопоставление.
      *
-     * @param string   $kaspiStatus            Статус Kaspi.
-     * @param int      $amoPipelineId         ID воронки amoCRM.
-     * @param int      $amoStatusId           ID статуса amoCRM.
-     * @param int|null $amoResponsibleUserId  ID ответственного amoCRM.
-     * @return array<string, mixed>
+     * @param string $kaspiStatus    Статус Kaspi.
+     * @param int    $amoPipelineId  ID воронки amoCRM.
+     * @param int    $amoStatusId    ID статуса amoCRM.
+     * @param bool   $isActive       Флаг активности сопоставления.
+     * @return int ID сохранённой записи.
      */
-    public function upsertMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, ?int $amoResponsibleUserId = null): array {
+    public function upsertMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive = true): int {
         try {
-            $this->pdo->beginTransaction();
-            $existing = $this->fetchMappingByStatus($kaspiStatus);
-            if ($existing === null) {
-                $this->insertMapping($kaspiStatus, $amoPipelineId, $amoStatusId, $amoResponsibleUserId);
-                $action = 'inserted';
-            } else {
-                $this->updateMapping($kaspiStatus, $amoPipelineId, $amoStatusId, $amoResponsibleUserId);
-                $action = 'updated';
-            }
-            $this->pdo->commit();
-            $mapping = $this->fetchMappingByStatus($kaspiStatus) ?? [];
+            $id = $this->performUpsert($kaspiStatus, $amoPipelineId, $amoStatusId, $isActive);
             Logger::info('Status mapping upserted', [
                 'kaspi_status' => $kaspiStatus,
-                'action' => $action,
+                'amo_pipeline_id' => $amoPipelineId,
+                'amo_status_id' => $amoStatusId,
+                'is_active' => $isActive,
+                'id' => $id,
             ]);
-            return $mapping;
+            return $id;
         } catch (PDOException $e) {
-            $this->rollbackSafely();
             Logger::error('Failed to upsert status mapping', [
                 'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $amoPipelineId,
+                'amo_status_id' => $amoStatusId,
+                'is_active' => $isActive,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
@@ -144,22 +151,16 @@ final class StatusMappingManager {
 
     /**
      * Удаляет сопоставление по ID.
-     *
-     * @param int $id Идентификатор записи.
-     * @return array{deleted: bool}
      */
-    public function deleteMapping(int $id): array {
+    public function deleteMapping(int $id): bool {
         try {
-            $this->pdo->beginTransaction();
             $stmt = $this->pdo->prepare('DELETE FROM status_mapping WHERE id = :id');
             $stmt->bindValue(':id', $id, PDO::PARAM_INT);
             $stmt->execute();
             $deleted = $stmt->rowCount() > 0;
-            $this->pdo->commit();
             Logger::info('Status mapping deleted', ['id' => $id, 'deleted' => $deleted]);
-            return ['deleted' => $deleted];
+            return $deleted;
         } catch (PDOException $e) {
-            $this->rollbackSafely();
             Logger::error('Failed to delete status mapping', [
                 'id' => $id,
                 'error' => $e->getMessage(),
@@ -170,30 +171,24 @@ final class StatusMappingManager {
 
     /**
      * Деактивирует сопоставление.
-     *
-     * @param int $id Идентификатор записи.
-     * @return array{updated: bool}
      */
-    public function deactivateMapping(int $id): array {
+    public function deactivateMapping(int $id): bool {
         if (!$this->hasActiveColumn) {
             Logger::error('Cannot deactivate mapping: is_active column missing', ['id' => $id]);
-            return ['updated' => false];
+            return false;
         }
-        return $this->toggleActive($id, false);
+        return $this->setActive($id, false);
     }
 
     /**
      * Активирует сопоставление.
-     *
-     * @param int $id Идентификатор записи.
-     * @return array{updated: bool}
      */
-    public function activateMapping(int $id): array {
+    public function activateMapping(int $id): bool {
         if (!$this->hasActiveColumn) {
             Logger::error('Cannot activate mapping: is_active column missing', ['id' => $id]);
-            return ['updated' => false];
+            return false;
         }
-        return $this->toggleActive($id, true);
+        return $this->setActive($id, true);
     }
 
     /**
@@ -202,27 +197,8 @@ final class StatusMappingManager {
      * @return array<int, string>
      */
     public function getKaspiStatuses(): array {
-        try {
-            $sql = 'SELECT kaspi_status FROM status_mapping';
-            if ($this->hasActiveColumn) {
-                $sql .= ' WHERE is_active = :is_active';
-            }
-            $sql .= ' ORDER BY kaspi_status';
-            $stmt = $this->pdo->prepare($sql);
-            if ($this->hasActiveColumn) {
-                $stmt->bindValue(':is_active', true, PDO::PARAM_BOOL);
-            }
-            $stmt->execute();
-            $statuses = [];
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $statuses[] = (string) $row['kaspi_status'];
-            }
-            Logger::info('Kaspi statuses fetched', ['count' => count($statuses)]);
-            return $statuses;
-        } catch (PDOException $e) {
-            Logger::error('Failed to fetch Kaspi statuses', ['error' => $e->getMessage()]);
-            throw $e;
-        }
+        Logger::info('Kaspi statuses fetched', ['count' => count(self::SUPPORTED_KASPI_STATUSES)]);
+        return self::SUPPORTED_KASPI_STATUSES;
     }
 
     /**
@@ -237,16 +213,18 @@ final class StatusMappingManager {
                     .' SUM(CASE WHEN is_active THEN 1 ELSE 0 END) AS active,'
                     .' SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END) AS inactive'
                     .' FROM status_mapping';
-                $stmt = $this->pdo->query($sql);
-                $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            } else {
+                $sql = 'SELECT COUNT(*) AS total FROM status_mapping';
+            }
+            $stmt = $this->pdo->query($sql);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            if ($this->hasActiveColumn) {
                 $stats = [
                     'total' => isset($row['total']) ? (int) $row['total'] : 0,
                     'active' => isset($row['active']) ? (int) $row['active'] : 0,
                     'inactive' => isset($row['inactive']) ? (int) $row['inactive'] : 0,
                 ];
             } else {
-                $stmt = $this->pdo->query('SELECT COUNT(*) AS total FROM status_mapping');
-                $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
                 $total = isset($row['total']) ? (int) $row['total'] : 0;
                 $stats = [
                     'total' => $total,
@@ -307,10 +285,19 @@ final class StatusMappingManager {
     /**
      * Получает сопоставление по статусу без логирования.
      */
-    private function fetchMappingByStatus(string $kaspiStatus): ?array {
-        $sql = 'SELECT '.$this->baseColumns().' FROM status_mapping WHERE kaspi_status = :kaspi_status LIMIT 1';
+    private function fetchMapping(string $kaspiStatus, int $pipelineId, bool $onlyActive): ?array {
+        $sql = 'SELECT '.$this->baseColumns().' FROM status_mapping'
+            .' WHERE kaspi_status = :kaspi_status AND amo_pipeline_id = :amo_pipeline_id';
+        if ($onlyActive && $this->hasActiveColumn) {
+            $sql .= ' AND is_active = :is_active';
+        }
+        $sql .= ' LIMIT 1';
         $stmt = $this->pdo->prepare($sql);
         $stmt->bindValue(':kaspi_status', $kaspiStatus);
+        $stmt->bindValue(':amo_pipeline_id', $pipelineId, PDO::PARAM_INT);
+        if ($onlyActive && $this->hasActiveColumn) {
+            $stmt->bindValue(':is_active', true, PDO::PARAM_BOOL);
+        }
         $stmt->execute();
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($row === false || $row === null) {
@@ -319,83 +306,77 @@ final class StatusMappingManager {
         return $this->mapRow($row);
     }
 
-    /**
-     * Вставляет новую запись.
-     */
-    private function insertMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, ?int $amoResponsibleUserId): void {
-        $columns = ['kaspi_status', 'amo_pipeline_id', 'amo_status_id', 'amo_responsible_user_id'];
-        $placeholders = [':kaspi_status', ':amo_pipeline_id', ':amo_status_id', ':amo_responsible_user_id'];
-        if ($this->hasActiveColumn) {
-            $columns[] = 'is_active';
-            $placeholders[] = ':is_active';
+    private function performUpsert(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive): int {
+        $driver = (string) $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($driver === 'pgsql') {
+            $sql = 'INSERT INTO status_mapping (kaspi_status, amo_pipeline_id, amo_status_id'.($this->hasActiveColumn ? ', is_active' : '').')'
+                .' VALUES (:kaspi_status, :amo_pipeline_id, :amo_status_id'.($this->hasActiveColumn ? ', :is_active' : '').')'
+                .' ON CONFLICT (kaspi_status, amo_pipeline_id) DO UPDATE SET '
+                .'amo_status_id = EXCLUDED.amo_status_id'
+                .($this->hasActiveColumn ? ', is_active = EXCLUDED.is_active' : '')
+                .', updated_at = NOW()'
+                .' RETURNING id';
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->bindValue(':kaspi_status', $kaspiStatus);
+            $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
+            $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
+            if ($this->hasActiveColumn) {
+                $stmt->bindValue(':is_active', $isActive, PDO::PARAM_BOOL);
+            }
+            $stmt->execute();
+            $id = $stmt->fetchColumn();
+            if ($id === false || $id === null) {
+                throw new \RuntimeException('Upsert did not return an ID');
+            }
+            return (int) $id;
         }
-        $sql = sprintf(
-            'INSERT INTO status_mapping (%s) VALUES (%s)',
-            implode(', ', $columns),
-            implode(', ', $placeholders)
-        );
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->bindValue(':kaspi_status', $kaspiStatus);
-        $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
-        $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
-        if ($amoResponsibleUserId === null) {
-            $stmt->bindValue(':amo_responsible_user_id', null, PDO::PARAM_NULL);
-        } else {
-            $stmt->bindValue(':amo_responsible_user_id', $amoResponsibleUserId, PDO::PARAM_INT);
-        }
-        if ($this->hasActiveColumn) {
-            $stmt->bindValue(':is_active', true, PDO::PARAM_BOOL);
-        }
-        $stmt->execute();
-    }
 
-    /**
-     * Обновляет существующую запись.
-     */
-    private function updateMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, ?int $amoResponsibleUserId): void {
-        $setParts = [
-            'amo_pipeline_id = :amo_pipeline_id',
-            'amo_status_id = :amo_status_id',
-            'amo_responsible_user_id = :amo_responsible_user_id',
-        ];
+        // Default to MySQL/MariaDB syntax.
+        $columns = 'kaspi_status, amo_pipeline_id, amo_status_id';
+        $values = ':kaspi_status, :amo_pipeline_id, :amo_status_id';
+        $update = 'amo_status_id = VALUES(amo_status_id), updated_at = CURRENT_TIMESTAMP';
         if ($this->hasActiveColumn) {
-            $setParts[] = 'is_active = :is_active';
+            $columns .= ', is_active';
+            $values .= ', :is_active';
+            $update = 'amo_status_id = VALUES(amo_status_id), is_active = VALUES(is_active), updated_at = CURRENT_TIMESTAMP';
         }
-        $sql = 'UPDATE status_mapping SET '.implode(', ', $setParts).' WHERE kaspi_status = :kaspi_status';
+        $sql = 'INSERT INTO status_mapping ('.$columns.') VALUES ('.$values.')'
+            .' ON DUPLICATE KEY UPDATE '.$update;
         $stmt = $this->pdo->prepare($sql);
         $stmt->bindValue(':kaspi_status', $kaspiStatus);
         $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
         $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
-        if ($amoResponsibleUserId === null) {
-            $stmt->bindValue(':amo_responsible_user_id', null, PDO::PARAM_NULL);
-        } else {
-            $stmt->bindValue(':amo_responsible_user_id', $amoResponsibleUserId, PDO::PARAM_INT);
-        }
         if ($this->hasActiveColumn) {
-            $stmt->bindValue(':is_active', true, PDO::PARAM_BOOL);
+            $stmt->bindValue(':is_active', $isActive, PDO::PARAM_BOOL);
         }
         $stmt->execute();
+        $lastInsertId = (int) $this->pdo->lastInsertId();
+        if ($lastInsertId > 0) {
+            return $lastInsertId;
+        }
+        $mapping = $this->fetchMapping($kaspiStatus, $amoPipelineId, false);
+        if ($mapping === null || !isset($mapping['id'])) {
+            throw new \RuntimeException('Failed to fetch status mapping after upsert');
+        }
+        return (int) $mapping['id'];
     }
 
     /**
      * Активирует или деактивирует запись.
      */
-    private function toggleActive(int $id, bool $active): array {
+    private function setActive(int $id, bool $active): bool {
         try {
-            $this->pdo->beginTransaction();
             $stmt = $this->pdo->prepare('UPDATE status_mapping SET is_active = :is_active WHERE id = :id');
             $stmt->bindValue(':id', $id, PDO::PARAM_INT);
             $stmt->bindValue(':is_active', $active, PDO::PARAM_BOOL);
             $stmt->execute();
             $updated = $stmt->rowCount() > 0;
-            $this->pdo->commit();
             Logger::info($active ? 'Status mapping activated' : 'Status mapping deactivated', [
                 'id' => $id,
                 'updated' => $updated,
             ]);
-            return ['updated' => $updated];
+            return $updated;
         } catch (PDOException $e) {
-            $this->rollbackSafely();
             Logger::error('Failed to change mapping activity', [
                 'id' => $id,
                 'active' => $active,
@@ -435,15 +416,6 @@ final class StatusMappingManager {
             ]);
             $this->columnExistsCache[$column] = false;
             return false;
-        }
-    }
-
-    /**
-     * Откатывает транзакцию, если она открыта.
-     */
-    private function rollbackSafely(): void {
-        if ($this->pdo->inTransaction()) {
-            $this->pdo->rollBack();
         }
     }
 
