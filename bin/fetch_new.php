@@ -156,16 +156,20 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
         $existing = $stmtSelect->fetch();
 
         if ($existing === false) {
+            $reservationTime = new DateTimeImmutable('now', $utcTimezone);
+            $reservationTimeFormatted = $reservationTime->format('Y-m-d H:i:s');
             try {
                 $stmtInsert = $pdo->prepare(
                     'INSERT INTO orders_map (order_code, kaspi_order_id, lead_id, total_price, created_at, processing_token, processing_at) ' .
-                    'VALUES (:code, :order_id, 0, :total_price, NOW(), :token, NOW())'
+                    'VALUES (:code, :order_id, 0, :total_price, :created_at, :token, :processing_at)'
                 );
                 $stmtInsert->execute([
                     ':code' => $code,
                     ':order_id' => (string) $orderId,
                     ':total_price' => $price,
                     ':token' => $processingToken,
+                    ':created_at' => $reservationTimeFormatted,
+                    ':processing_at' => $reservationTimeFormatted,
                 ]);
             } catch (PDOException $e) {
                 $pdo->rollBack();
@@ -181,12 +185,19 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 continue;
             }
 
+            $reservationTime = new DateTimeImmutable('now', $utcTimezone);
+            $reservationTimeFormatted = $reservationTime->format('Y-m-d H:i:s');
+
             $foreignToken = trim((string) ($existing['processing_token'] ?? ''));
             if ($foreignToken !== '' && $foreignToken !== $processingToken) {
                 $lockedAtRaw = $existing['processing_at'] ?? null;
-                $lockedAtTs = is_string($lockedAtRaw) && $lockedAtRaw !== '' ? strtotime($lockedAtRaw) : false;
-                $nowTs = time();
-                $lockExpired = !$lockedAtTs || ($nowTs - $lockedAtTs) >= $processingTimeoutSeconds;
+                $lockExpired = true;
+                if (is_string($lockedAtRaw) && $lockedAtRaw !== '') {
+                    $lockedAt = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $lockedAtRaw, $utcTimezone);
+                    if ($lockedAt instanceof DateTimeImmutable) {
+                        $lockExpired = ($reservationTime->getTimestamp() - $lockedAt->getTimestamp()) >= $processingTimeoutSeconds;
+                    }
+                }
 
                 if ($lockExpired) {
                     $stmtClearLock = $pdo->prepare(
@@ -216,7 +227,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
 
             $stmtUpdateReserve = $pdo->prepare(
                 'UPDATE orders_map ' .
-                'SET kaspi_order_id = :order_id, total_price = :total_price, processing_token = :token, processing_at = NOW() ' .
+                'SET kaspi_order_id = :order_id, total_price = :total_price, processing_token = :token, processing_at = :processing_at ' .
                 'WHERE order_code = :code'
             );
             $stmtUpdateReserve->execute([
@@ -224,6 +235,7 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
                 ':total_price' => $price,
                 ':token' => $processingToken,
                 ':code' => $code,
+                ':processing_at' => $reservationTimeFormatted,
             ]);
         }
 
