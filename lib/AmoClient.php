@@ -212,4 +212,22 @@ final class AmoClient {
         $list = $res['_embedded']['elements'] ?? [];
         return $list ? $list[0] : [];
     }
+
+    /**
+     * Возвращает список воронок amoCRM вместе с их статусами.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function getPipelines(): array {
+        $response = $this->request('GET', '/api/v4/leads/pipelines');
+        if (!is_array($response)) {
+            return [];
+        }
+        $embedded = $response['_embedded'] ?? [];
+        if (!is_array($embedded)) {
+            return [];
+        }
+        $pipelines = $embedded['pipelines'] ?? [];
+        return is_array($pipelines) ? array_values($pipelines) : [];
+    }
 }
