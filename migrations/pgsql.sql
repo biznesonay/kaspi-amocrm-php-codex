@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS orders_map (
   order_code TEXT PRIMARY KEY,
   kaspi_order_id TEXT NOT NULL,
+  kaspi_status TEXT,
   lead_id BIGINT NOT NULL,
   total_price NUMERIC(20,0),
   processing_token TEXT,
@@ -13,6 +14,8 @@ CREATE TABLE IF NOT EXISTS orders_map (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE IF EXISTS orders_map
+  ADD COLUMN IF NOT EXISTS kaspi_status TEXT;
 ALTER TABLE IF EXISTS orders_map
   ADD COLUMN IF NOT EXISTS total_price NUMERIC(20,0);
 ALTER TABLE IF EXISTS orders_map

@@ -6,6 +6,22 @@ SET @col_exists := (
   FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE()
     AND TABLE_NAME = 'orders_map'
+    AND COLUMN_NAME = 'kaspi_status'
+);
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `orders_map` ADD COLUMN `kaspi_status` VARCHAR(64) NULL DEFAULT NULL;',
+  'SELECT 0;'
+);
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'orders_map'
     AND COLUMN_NAME = 'total_price'
 );
 SET @ddl := IF(
