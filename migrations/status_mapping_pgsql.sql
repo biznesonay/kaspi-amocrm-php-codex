@@ -4,12 +4,13 @@ CREATE TABLE IF NOT EXISTS status_mapping (
   amo_pipeline_id BIGINT NOT NULL,
   amo_status_id BIGINT NOT NULL,
   amo_responsible_user_id BIGINT,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS status_mapping_kaspi_status_unique
-  ON status_mapping (kaspi_status);
+CREATE UNIQUE INDEX IF NOT EXISTS status_mapping_kaspi_status_pipeline_unique
+  ON status_mapping (kaspi_status, amo_pipeline_id);
 
 CREATE OR REPLACE FUNCTION set_status_mapping_updated_at()
 RETURNS TRIGGER AS $$
@@ -18,6 +19,43 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'status_mapping'
+      AND column_name = 'is_active'
+  ) THEN
+    ALTER TABLE status_mapping
+      ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'status_mapping'
+      AND indexname = 'status_mapping_kaspi_status_unique'
+  ) THEN
+    EXECUTE 'DROP INDEX ' || quote_ident(current_schema()) || '.status_mapping_kaspi_status_unique';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'status_mapping'
+      AND indexname = 'status_mapping_kaspi_status_pipeline_unique'
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX status_mapping_kaspi_status_pipeline_unique ON '
+      || quote_ident(current_schema())
+      || '.status_mapping (kaspi_status, amo_pipeline_id)';
+  END IF;
+END;
+$$;
 
 DO $$
 BEGIN
