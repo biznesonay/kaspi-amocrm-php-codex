@@ -174,8 +174,20 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
             } catch (PDOException $e) {
                 $pdo->rollBack();
                 $reservationTransactionStarted = false;
-                Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
-                continue;
+
+                $sqlState = $e->errorInfo[0] ?? null;
+                if ($sqlState === '23000' || $sqlState === '23505') {
+                    Logger::info('Order is already being processed or completed, skip lead creation', ['code' => $code]);
+                    continue;
+                }
+
+                Logger::error('Failed to reserve new order in map', [
+                    'code' => $code,
+                    'error' => $e->getMessage(),
+                    'exception' => get_class($e),
+                    'sql_state' => $sqlState,
+                ]);
+                throw $e;
             }
         } else {
             if ((int) ($existing['lead_id'] ?? 0) > 0) {
