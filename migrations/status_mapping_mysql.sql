@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS status_mapping (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY status_mapping_kaspi_pipeline_status_unique (kaspi_status, amo_pipeline_id, amo_status_id)
+  UNIQUE KEY status_mapping_kaspi_pipeline_unique (kaspi_status, amo_pipeline_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 SET @column_exists = (
@@ -83,11 +83,27 @@ SET @triple_index_exists = (
     AND table_name = 'status_mapping'
     AND index_name = 'status_mapping_kaspi_pipeline_status_unique'
 );
-SET @add_triple_index_sql = IF(
-  @triple_index_exists = 0,
-  'ALTER TABLE status_mapping ADD UNIQUE INDEX status_mapping_kaspi_pipeline_status_unique (kaspi_status, amo_pipeline_id, amo_status_id)',
+SET @drop_triple_index_sql = IF(
+  @triple_index_exists > 0,
+  'ALTER TABLE status_mapping DROP INDEX status_mapping_kaspi_pipeline_status_unique',
   'SELECT 1'
 );
-PREPARE stmt FROM @add_triple_index_sql;
+PREPARE stmt FROM @drop_triple_index_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @new_pair_index_exists = (
+  SELECT COUNT(*)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'status_mapping'
+    AND index_name = 'status_mapping_kaspi_pipeline_unique'
+);
+SET @add_pair_index_sql = IF(
+  @new_pair_index_exists = 0,
+  'ALTER TABLE status_mapping ADD UNIQUE INDEX status_mapping_kaspi_pipeline_unique (kaspi_status, amo_pipeline_id)',
+  'SELECT 1'
+);
+PREPARE stmt FROM @add_pair_index_sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;

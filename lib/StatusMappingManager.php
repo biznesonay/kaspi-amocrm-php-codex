@@ -321,7 +321,7 @@ final class StatusMappingManager {
         if ($driver === 'pgsql') {
             $columns = 'kaspi_status, amo_pipeline_id, amo_status_id';
             $values = ':kaspi_status, :amo_pipeline_id, :amo_status_id';
-            $updates = [];
+            $updates = ['amo_status_id = EXCLUDED.amo_status_id'];
             if ($this->hasSortOrderColumn) {
                 $columns .= ', sort_order';
                 $values .= ', :sort_order';
@@ -334,7 +334,7 @@ final class StatusMappingManager {
             }
             $updates[] = 'updated_at = NOW()';
             $sql = 'INSERT INTO status_mapping ('.$columns.') VALUES ('.$values.')'
-                .' ON CONFLICT (kaspi_status, amo_pipeline_id, amo_status_id) DO UPDATE SET '
+                .' ON CONFLICT (kaspi_status, amo_pipeline_id) DO UPDATE SET '
                 .implode(', ', $updates)
                 .' RETURNING id';
             $stmt = $this->pdo->prepare($sql);
@@ -357,7 +357,10 @@ final class StatusMappingManager {
 
         $columns = 'kaspi_status, amo_pipeline_id, amo_status_id';
         $values = ':kaspi_status, :amo_pipeline_id, :amo_status_id';
-        $updates = ['updated_at = CURRENT_TIMESTAMP'];
+        $updates = [
+            'amo_status_id = VALUES(amo_status_id)',
+            'updated_at = CURRENT_TIMESTAMP',
+        ];
         if ($this->hasSortOrderColumn) {
             $columns .= ', sort_order';
             $values .= ', :sort_order';
@@ -387,12 +390,11 @@ final class StatusMappingManager {
         }
         $stmt = $this->pdo->prepare(
             'SELECT id FROM status_mapping WHERE kaspi_status = :kaspi_status'
-            .' AND amo_pipeline_id = :amo_pipeline_id AND amo_status_id = :amo_status_id'
+            .' AND amo_pipeline_id = :amo_pipeline_id'
             .' ORDER BY id'
         );
         $stmt->bindValue(':kaspi_status', $kaspiStatus);
         $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
-        $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
         $stmt->execute();
         $id = $stmt->fetchColumn();
         if ($id === false || $id === null) {
