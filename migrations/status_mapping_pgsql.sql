@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS status_mapping (
   updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS status_mapping_kaspi_pipeline_status_unique
-  ON status_mapping (kaspi_status, amo_pipeline_id, amo_status_id);
+CREATE UNIQUE INDEX IF NOT EXISTS status_mapping_kaspi_pipeline_unique
+  ON status_mapping (kaspi_status, amo_pipeline_id);
 
 CREATE OR REPLACE FUNCTION set_status_mapping_updated_at()
 RETURNS TRIGGER AS $$
@@ -65,16 +65,37 @@ BEGIN
     EXECUTE 'DROP INDEX ' || quote_ident(current_schema()) || '.status_mapping_kaspi_status_pipeline_unique';
   END IF;
 
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1
     FROM pg_indexes
     WHERE schemaname = current_schema()
       AND tablename = 'status_mapping'
       AND indexname = 'status_mapping_kaspi_pipeline_status_unique'
   ) THEN
-    EXECUTE 'CREATE UNIQUE INDEX status_mapping_kaspi_pipeline_status_unique ON '
+    EXECUTE 'DROP INDEX ' || quote_ident(current_schema()) || '.status_mapping_kaspi_pipeline_status_unique';
+  END IF;
+
+  PERFORM 1
+  FROM pg_indexes
+  WHERE schemaname = current_schema()
+    AND tablename = 'status_mapping'
+    AND indexname = 'status_mapping_kaspi_pipeline_unique'
+    AND indexdef LIKE 'CREATE UNIQUE INDEX % ON ' || quote_ident(current_schema()) || '.status_mapping USING btree (kaspi_status, amo_pipeline_id%';
+
+  IF NOT FOUND THEN
+    IF EXISTS (
+      SELECT 1
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'status_mapping'
+        AND indexname = 'status_mapping_kaspi_pipeline_unique'
+    ) THEN
+      EXECUTE 'DROP INDEX ' || quote_ident(current_schema()) || '.status_mapping_kaspi_pipeline_unique';
+    END IF;
+
+    EXECUTE 'CREATE UNIQUE INDEX status_mapping_kaspi_pipeline_unique ON '
       || quote_ident(current_schema())
-      || '.status_mapping (kaspi_status, amo_pipeline_id, amo_status_id)';
+      || '.status_mapping (kaspi_status, amo_pipeline_id)';
   END IF;
 END;
 $$;
