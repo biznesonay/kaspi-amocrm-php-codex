@@ -51,7 +51,26 @@ if ($method === 'GET') {
     try {
         switch ($action) {
             case 'get_mappings':
-                $result = $manager->getAllMappings();
+                $kaspiStatus = isset($_GET['kaspi_status']) ? trim((string) $_GET['kaspi_status']) : '';
+                $amoPipelineIdRaw = $_GET['amo_pipeline_id'] ?? null;
+                $onlyActiveRaw = $_GET['only_active'] ?? null;
+                $onlyActive = null;
+                if ($onlyActiveRaw !== null) {
+                    $onlyActive = filter_var($onlyActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                }
+                if ($kaspiStatus !== '' && $amoPipelineIdRaw !== null) {
+                    $amoPipelineId = filter_var($amoPipelineIdRaw, FILTER_VALIDATE_INT);
+                    if ($amoPipelineId === false || $amoPipelineId === null) {
+                        respondError('amo_pipeline_id must be an integer', 400, ['value' => $amoPipelineIdRaw]);
+                    }
+                    $result = $manager->getMappings(
+                        $kaspiStatus,
+                        (int) $amoPipelineId,
+                        $onlyActive ?? false
+                    );
+                } else {
+                    $result = $manager->getAllMappings();
+                }
                 break;
             case 'get_kaspi_statuses':
                 $result = $manager->getKaspiStatuses();
@@ -62,6 +81,27 @@ if ($method === 'GET') {
             case 'get_amo_pipelines':
                 $amoClient = new AmoClient();
                 $result = $amoClient->getPipelines();
+                break;
+            case 'get_amo_status_ids':
+                $kaspiStatus = isset($_GET['kaspi_status']) ? trim((string) $_GET['kaspi_status']) : '';
+                $amoPipelineIdRaw = $_GET['amo_pipeline_id'] ?? null;
+                if ($kaspiStatus === '' || $amoPipelineIdRaw === null) {
+                    respondError('kaspi_status and amo_pipeline_id are required', 400, ['action' => $action]);
+                }
+                $amoPipelineId = filter_var($amoPipelineIdRaw, FILTER_VALIDATE_INT);
+                if ($amoPipelineId === false || $amoPipelineId === null) {
+                    respondError('amo_pipeline_id must be an integer', 400, ['value' => $amoPipelineIdRaw]);
+                }
+                $onlyActiveRaw = $_GET['only_active'] ?? null;
+                $onlyActive = true;
+                if ($onlyActiveRaw !== null) {
+                    $onlyActiveParsed = filter_var($onlyActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                    if ($onlyActiveParsed !== null) {
+                        $onlyActive = $onlyActiveParsed;
+                    }
+                }
+                $ids = $manager->getAmoStatusIds($kaspiStatus, (int) $amoPipelineId, $onlyActive);
+                $result = ['amo_status_ids' => $ids];
                 break;
             default:
                 respondError('Unknown action query parameter value', 400, ['action' => $action, 'method' => 'GET']);
@@ -93,7 +133,7 @@ if ($method === 'POST') {
             case 'upsert_mapping':
                 $kaspiStatus = isset($payload['kaspi_status']) ? trim((string) $payload['kaspi_status']) : '';
                 $amoPipelineId = filter_var($payload['amo_pipeline_id'] ?? null, FILTER_VALIDATE_INT);
-                $amoStatusId = filter_var($payload['amo_status_id'] ?? null, FILTER_VALIDATE_INT);
+                $amoStatusIdsRaw = $payload['amo_status_ids'] ?? ($payload['amo_status_id'] ?? null);
                 $isActiveRaw = $payload['is_active'] ?? true;
                 $isActive = filter_var($isActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
                 if ($isActive === null) {
@@ -105,17 +145,47 @@ if ($method === 'POST') {
                 if ($amoPipelineId === false || $amoPipelineId === null) {
                     respondError('amo_pipeline_id must be an integer', 400, ['value' => $payload['amo_pipeline_id'] ?? null]);
                 }
-                if ($amoStatusId === false || $amoStatusId === null) {
-                    respondError('amo_status_id must be an integer', 400, ['value' => $payload['amo_status_id'] ?? null]);
+                $amoStatusIds = [];
+                if (is_array($amoStatusIdsRaw)) {
+                    foreach (array_values($amoStatusIdsRaw) as $value) {
+                        $statusId = filter_var($value, FILTER_VALIDATE_INT);
+                        if ($statusId === false || $statusId === null) {
+                            respondError('amo_status_ids must contain integers', 400, ['value' => $value]);
+                        }
+                        $amoStatusIds[] = (int) $statusId;
+                    }
+                } elseif ($amoStatusIdsRaw !== null) {
+                    $statusId = filter_var($amoStatusIdsRaw, FILTER_VALIDATE_INT);
+                    if ($statusId === false || $statusId === null) {
+                        respondError('amo_status_id must be an integer', 400, ['value' => $amoStatusIdsRaw]);
+                    }
+                    $amoStatusIds[] = (int) $statusId;
+                }
+                if ($amoStatusIds === []) {
+                    respondError('amo_status_ids must be a non-empty array of integers', 400, ['value' => $amoStatusIdsRaw]);
+                }
+                $sortOrders = [];
+                if (isset($payload['sort_orders']) && is_array($payload['sort_orders'])) {
+                    foreach (array_values($payload['sort_orders']) as $index => $sortValue) {
+                        $sortOrder = filter_var($sortValue, FILTER_VALIDATE_INT);
+                        if ($sortOrder !== false && $sortOrder !== null) {
+                            $sortOrders[$index] = (int) $sortOrder;
+                        }
+                    }
                 }
 
-                $id = $manager->upsertMapping(
-                    $kaspiStatus,
-                    (int) $amoPipelineId,
-                    (int) $amoStatusId,
-                    (bool) $isActive
-                );
-                $result = ['id' => $id];
+                $ids = [];
+                foreach (array_values($amoStatusIds) as $index => $statusId) {
+                    $sortOrder = $sortOrders[$index] ?? $index;
+                    $ids[] = $manager->upsertMapping(
+                        $kaspiStatus,
+                        (int) $amoPipelineId,
+                        $statusId,
+                        (bool) $isActive,
+                        (int) $sortOrder
+                    );
+                }
+                $result = ['ids' => $ids];
                 break;
             case 'delete_mapping':
                 $idRaw = $_GET['id'] ?? null;

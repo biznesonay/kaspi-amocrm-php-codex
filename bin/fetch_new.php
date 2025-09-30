@@ -146,9 +146,12 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $defaultStatusId = $statusId ?: null;
     $effectiveStatusId = $defaultStatusId;
     if ($kaspiOrderStatus !== '') {
-        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiOrderStatus, $pipelineId);
-        if (is_int($mappedStatusId) && $mappedStatusId > 0) {
-            $effectiveStatusId = $mappedStatusId;
+        $mappedStatusIds = $statusMappingManager->getAmoStatusIds($kaspiOrderStatus, $pipelineId, true);
+        foreach ($mappedStatusIds as $candidateStatusId) {
+            if ($candidateStatusId > 0) {
+                $effectiveStatusId = $candidateStatusId;
+                break;
+            }
         }
     }
     $processingToken = bin2hex(random_bytes(16));
