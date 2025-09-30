@@ -46,15 +46,22 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $storedKaspiStatus = isset($row['kaspi_status']) ? trim((string)$row['kaspi_status']) : '';
 
     if ($kaspiState !== '' && $kaspiState !== $storedKaspiStatus) {
-        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiState, $pipelineId);
-        if (is_int($mappedStatusId) && $mappedStatusId > 0) {
+        $mappedStatusIds = $statusMappingManager->getAmoStatusIds($kaspiState, $pipelineId, true);
+        $nextStatusId = null;
+        foreach ($mappedStatusIds as $candidateStatusId) {
+            if ($candidateStatusId > 0) {
+                $nextStatusId = $candidateStatusId;
+                break;
+            }
+        }
+        if ($nextStatusId !== null) {
             try {
-                $amo->updateLead($leadId, ['status_id' => $mappedStatusId]);
+                $amo->updateLead($leadId, ['status_id' => $nextStatusId]);
                 Logger::info('Order status changed', [
                     'lead_id' => $leadId,
                     'order_code' => $code,
                     'kaspi_status' => $kaspiState,
-                    'amo_status_id' => $mappedStatusId,
+                    'amo_status_id' => $nextStatusId,
                 ]);
             } catch (Throwable $e) {
                 Logger::error('Failed to update lead status', [
