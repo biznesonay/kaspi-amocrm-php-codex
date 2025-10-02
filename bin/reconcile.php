@@ -13,6 +13,7 @@ $productCache = [];
 
 $catalogId  = (int) env('AMO_CATALOG_ID', '0');
 $pipelineId = (int) env('AMO_PIPELINE_ID', '0');
+$defaultStatusId = (int) env('AMO_STATUS_ID', '0');
 
 $lastCheck = (int) (Db::getSetting('last_check_ms', '0') ?? '0');
 $nowMs = (int) (microtime(true) * 1000);
@@ -46,13 +47,9 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     $storedKaspiStatus = isset($row['kaspi_status']) ? trim((string)$row['kaspi_status']) : '';
 
     if ($kaspiState !== '' && $kaspiState !== $storedKaspiStatus) {
-        $mappedStatusIds = $statusMappingManager->getAmoStatusIds($kaspiState, $pipelineId, true);
-        $nextStatusId = null;
-        foreach ($mappedStatusIds as $candidateStatusId) {
-            if ($candidateStatusId > 0) {
-                $nextStatusId = $candidateStatusId;
-                break;
-            }
+        $nextStatusId = $statusMappingManager->getAmoStatusId($kaspiState, $pipelineId);
+        if (($nextStatusId === null || $nextStatusId <= 0) && $defaultStatusId > 0) {
+            $nextStatusId = $defaultStatusId;
         }
         if ($nextStatusId !== null) {
             try {

@@ -77,6 +77,60 @@ final class StatusMappingManager {
     }
 
     /**
+     * Возвращает сопоставление по статусу Kaspi и ID воронки amoCRM.
+     */
+    public function getMapping(string $kaspiStatus, int $pipelineId): ?array {
+        try {
+            $mapping = $this->fetchMapping($kaspiStatus, $pipelineId, true);
+            Logger::info('Kaspi status mapping resolved', [
+                'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
+                'found' => $mapping !== null,
+            ]);
+            return $mapping;
+        } catch (PDOException $e) {
+            Logger::error('Failed to resolve Kaspi status mapping', [
+                'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Возвращает ID статуса amoCRM для статуса Kaspi.
+     */
+    public function getAmoStatusId(string $kaspiStatus, int $pipelineId): ?int {
+        $mapping = $this->getMapping($kaspiStatus, $pipelineId);
+        if ($mapping === null || !isset($mapping['amo_status_id'])) {
+            Logger::info('Kaspi status mapping amo status id not found', [
+                'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
+            ]);
+            return null;
+        }
+
+        $amoStatusId = (int) $mapping['amo_status_id'];
+        if ($amoStatusId <= 0) {
+            Logger::info('Kaspi status mapping amo status id is not positive', [
+                'kaspi_status' => $kaspiStatus,
+                'amo_pipeline_id' => $pipelineId,
+                'amo_status_id' => $amoStatusId,
+            ]);
+            return null;
+        }
+
+        Logger::info('Kaspi status mapping amo status id resolved', [
+            'kaspi_status' => $kaspiStatus,
+            'amo_pipeline_id' => $pipelineId,
+            'amo_status_id' => $amoStatusId,
+        ]);
+
+        return $amoStatusId;
+    }
+
+    /**
      * Возвращает список ID статусов amoCRM для статуса Kaspi.
      *
      * @param string $kaspiStatus Статус Kaspi.
@@ -85,7 +139,12 @@ final class StatusMappingManager {
      * @return array<int, int>
      */
     public function getAmoStatusIds(string $kaspiStatus, int $pipelineId, bool $onlyActive = true): array {
-        $mappings = $this->getMappings($kaspiStatus, $pipelineId, $onlyActive);
+        if ($onlyActive) {
+            $amoStatusId = $this->getAmoStatusId($kaspiStatus, $pipelineId);
+            return $amoStatusId !== null ? [$amoStatusId] : [];
+        }
+
+        $mappings = $this->fetchMappings($kaspiStatus, $pipelineId, false);
         $ids = [];
         foreach ($mappings as $mapping) {
             if (isset($mapping['amo_status_id'])) {
@@ -108,18 +167,16 @@ final class StatusMappingManager {
      * @param int    $amoPipelineId  ID воронки amoCRM.
      * @param int    $amoStatusId    ID статуса amoCRM.
      * @param bool   $isActive       Флаг активности сопоставления.
-     * @param int    $sortOrder      Порядок сортировки внутри статуса Kaspi.
      * @return int ID сохранённой записи.
      */
-    public function upsertMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive = true, int $sortOrder = 0): int {
+    public function upsertMapping(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive = true): int {
         try {
-            $id = $this->performUpsert($kaspiStatus, $amoPipelineId, $amoStatusId, $isActive, $sortOrder);
+            $id = $this->performUpsert($kaspiStatus, $amoPipelineId, $amoStatusId, $isActive);
             Logger::info('Status mapping upserted', [
                 'kaspi_status' => $kaspiStatus,
                 'amo_pipeline_id' => $amoPipelineId,
                 'amo_status_id' => $amoStatusId,
                 'is_active' => $isActive,
-                'sort_order' => $sortOrder,
                 'id' => $id,
             ]);
             return $id;
@@ -129,7 +186,6 @@ final class StatusMappingManager {
                 'amo_pipeline_id' => $amoPipelineId,
                 'amo_status_id' => $amoStatusId,
                 'is_active' => $isActive,
-                'sort_order' => $sortOrder,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
@@ -316,7 +372,28 @@ final class StatusMappingManager {
         return array_map(fn(array $row) => $this->mapRow($row), $rows);
     }
 
-    private function performUpsert(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive, int $sortOrder): int {
+    private function fetchMapping(string $kaspiStatus, int $pipelineId, bool $onlyActive): ?array {
+        $sql = 'SELECT '.$this->baseColumns().' FROM status_mapping'
+            .' WHERE kaspi_status = :kaspi_status AND amo_pipeline_id = :amo_pipeline_id';
+        if ($onlyActive && $this->hasActiveColumn) {
+            $sql .= ' AND is_active = :is_active';
+        }
+        $sql .= ' ORDER BY id LIMIT 1';
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->bindValue(':kaspi_status', $kaspiStatus);
+        $stmt->bindValue(':amo_pipeline_id', $pipelineId, PDO::PARAM_INT);
+        if ($onlyActive && $this->hasActiveColumn) {
+            $stmt->bindValue(':is_active', true, PDO::PARAM_BOOL);
+        }
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!is_array($row)) {
+            return null;
+        }
+        return $this->mapRow($row);
+    }
+
+    private function performUpsert(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive): int {
         $columns = ['kaspi_status', 'amo_pipeline_id', 'amo_status_id'];
         $placeholders = [':kaspi_status', ':amo_pipeline_id', ':amo_status_id'];
         $parameters = [
@@ -328,8 +405,7 @@ final class StatusMappingManager {
         if ($this->hasSortOrderColumn) {
             $columns[] = 'sort_order';
             $placeholders[] = ':sort_order';
-            $parameters[':sort_order'] = [$sortOrder, PDO::PARAM_INT];
-            $updatableColumns[] = 'sort_order';
+            $parameters[':sort_order'] = [0, PDO::PARAM_INT];
         }
         if ($this->hasActiveColumn) {
             $columns[] = 'is_active';

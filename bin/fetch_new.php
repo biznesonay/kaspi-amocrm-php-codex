@@ -143,15 +143,12 @@ foreach ($kaspi->listOrders($filters, 100) as $order) {
     if ($kaspiOrderStatus === '') {
         $kaspiOrderStatus = 'NEW';
     }
-    $defaultStatusId = $statusId ?: null;
+    $defaultStatusId = $statusId > 0 ? $statusId : null;
     $effectiveStatusId = $defaultStatusId;
     if ($kaspiOrderStatus !== '') {
-        $mappedStatusIds = $statusMappingManager->getAmoStatusIds($kaspiOrderStatus, $pipelineId, true);
-        foreach ($mappedStatusIds as $candidateStatusId) {
-            if ($candidateStatusId > 0) {
-                $effectiveStatusId = $candidateStatusId;
-                break;
-            }
+        $mappedStatusId = $statusMappingManager->getAmoStatusId($kaspiOrderStatus, $pipelineId);
+        if ($mappedStatusId !== null && $mappedStatusId > 0) {
+            $effectiveStatusId = $mappedStatusId;
         }
     }
     $processingToken = bin2hex(random_bytes(16));
