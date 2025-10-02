@@ -92,15 +92,29 @@ PREPARE stmt FROM @drop_triple_index_sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
-SET @new_pair_index_exists = (
-  SELECT COUNT(*)
+SET @pair_index_columns = (
+  SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',')
   FROM information_schema.statistics
   WHERE table_schema = DATABASE()
     AND table_name = 'status_mapping'
     AND index_name = 'status_mapping_kaspi_pipeline_unique'
 );
+SET @needs_pair_index_update = IF(
+  @pair_index_columns IS NULL OR @pair_index_columns <> 'kaspi_status,amo_pipeline_id',
+  1,
+  0
+);
+SET @drop_existing_pair_index_sql = IF(
+  @needs_pair_index_update = 1 AND @pair_index_columns IS NOT NULL,
+  'ALTER TABLE status_mapping DROP INDEX status_mapping_kaspi_pipeline_unique',
+  'SELECT 1'
+);
+PREPARE stmt FROM @drop_existing_pair_index_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 SET @add_pair_index_sql = IF(
-  @new_pair_index_exists = 0,
+  @needs_pair_index_update = 1,
   'ALTER TABLE status_mapping ADD UNIQUE INDEX status_mapping_kaspi_pipeline_unique (kaspi_status, amo_pipeline_id)',
   'SELECT 1'
 );
