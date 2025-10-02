@@ -13,10 +13,29 @@ final class StatusMappingManager {
     private bool $hasSortOrderColumn;
     /** @var array<string, bool> */
     private array $columnExistsCache = [];
-    /** @var array<string, bool> */
-    private array $tableExistsCache = [];
     /** @var array<int, string>|null */
     private ?array $kaspiStatusesCache = null;
+
+    /**
+     * Статусы заказов Kaspi в ожидаемом порядке.
+     *
+     * @var array<int, string>
+     */
+    public const KASPI_STATUSES = [
+        'NEW',
+        'APPROVED_BY_BANK',
+        'APPROVED_BY_MERCHANT',
+        'COLLECTED',
+        'ON_DELIVERY',
+        'DELIVERED',
+        'COMPLETED',
+        'RETURNED_TO_STORE',
+        'RETURNED_TO_BANK',
+        'RETURNED_TO_MERCHANT',
+        'CANCELLED_BY_BANK',
+        'CANCELLED_BY_MERCHANT',
+        'CANCELLED_BY_CUSTOMER',
+    ];
 
     public function __construct(?PDO $pdo = null) {
         $this->pdo = $pdo ?? Db::pdo();
@@ -240,20 +259,14 @@ final class StatusMappingManager {
      * @return array<int, string>
      */
     public function getKaspiStatuses(): array {
-        if ($this->kaspiStatusesCache !== null) {
+        if ($this->kaspiStatusesCache === null) {
+            $this->kaspiStatusesCache = self::KASPI_STATUSES;
+            Logger::info('Kaspi statuses loaded from constant', ['count' => count($this->kaspiStatusesCache)]);
+        } else {
             Logger::info('Kaspi statuses fetched from cache', ['count' => count($this->kaspiStatusesCache)]);
-            return $this->kaspiStatusesCache;
         }
 
-        try {
-            $statuses = $this->fetchKaspiStatuses();
-            $this->kaspiStatusesCache = $statuses;
-            Logger::info('Kaspi statuses fetched', ['count' => count($statuses)]);
-            return $statuses;
-        } catch (PDOException $e) {
-            Logger::error('Failed to fetch Kaspi statuses', ['error' => $e->getMessage()]);
-            throw $e;
-        }
+        return $this->kaspiStatusesCache;
     }
 
     /**
@@ -524,106 +537,6 @@ final class StatusMappingManager {
             $this->columnExistsCache[$column] = false;
             return false;
         }
-    }
-
-    private function fetchKaspiStatuses(): array {
-        $statuses = [];
-        $sources = [
-            [
-                'table' => 'orders_map',
-                'sql' => "SELECT DISTINCT kaspi_status FROM orders_map WHERE kaspi_status IS NOT NULL AND TRIM(kaspi_status) <> ''",
-            ],
-            [
-                'table' => 'status_mapping',
-                'sql' => "SELECT DISTINCT kaspi_status FROM status_mapping WHERE kaspi_status IS NOT NULL AND TRIM(kaspi_status) <> ''",
-            ],
-        ];
-
-        foreach ($sources as $source) {
-            if (!$this->tableExists($source['table'])) {
-                Logger::info('Skipping Kaspi status source table because it does not exist', ['table' => $source['table']]);
-                continue;
-            }
-
-            try {
-                $stmt = $this->pdo->query($source['sql']);
-            } catch (PDOException $e) {
-                Logger::error('Failed to query Kaspi statuses from source table', [
-                    'table' => $source['table'],
-                    'error' => $e->getMessage(),
-                ]);
-                continue;
-            }
-
-            if (!$stmt) {
-                continue;
-            }
-
-            $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
-            if (!is_array($rows)) {
-                continue;
-            }
-
-            foreach ($rows as $value) {
-                $normalized = $this->normalizeKaspiStatus($value);
-                if ($normalized === '') {
-                    continue;
-                }
-                $statuses[$normalized] = true;
-            }
-        }
-
-        $result = array_keys($statuses);
-        sort($result, SORT_STRING);
-
-        if ($result === []) {
-            Logger::info('Kaspi statuses list is empty after querying sources');
-        }
-
-        return $result;
-    }
-
-    private function tableExists(string $table): bool {
-        if (array_key_exists($table, $this->tableExistsCache)) {
-            return $this->tableExistsCache[$table];
-        }
-
-        try {
-            $driver = (string) $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-            if ($driver === 'pgsql') {
-                $sql = 'SELECT 1 FROM information_schema.tables'
-                    .' WHERE table_schema = current_schema() AND table_name = :table';
-            } elseif ($driver === 'sqlite') {
-                $sql = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :table";
-            } else {
-                $sql = 'SELECT 1 FROM information_schema.tables'
-                    .' WHERE table_schema = DATABASE() AND table_name = :table';
-            }
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->bindValue(':table', $table);
-            $stmt->execute();
-            $exists = (bool) $stmt->fetchColumn();
-            $this->tableExistsCache[$table] = $exists;
-            return $exists;
-        } catch (PDOException $e) {
-            Logger::error('Failed to check table existence', [
-                'table' => $table,
-                'error' => $e->getMessage(),
-            ]);
-            $this->tableExistsCache[$table] = false;
-            return false;
-        }
-    }
-
-    private function normalizeKaspiStatus(mixed $value): string {
-        if ($value === null) {
-            return '';
-        }
-        $status = trim((string) $value);
-        if ($status === '') {
-            return '';
-        }
-        return strtoupper($status);
     }
 
     /**
