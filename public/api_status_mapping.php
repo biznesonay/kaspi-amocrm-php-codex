@@ -128,7 +128,29 @@ if ($method === 'POST') {
             case 'upsert_mapping':
                 $kaspiStatus = isset($payload['kaspi_status']) ? trim((string) $payload['kaspi_status']) : '';
                 $amoPipelineId = filter_var($payload['amo_pipeline_id'] ?? null, FILTER_VALIDATE_INT);
-                $amoStatusIdsRaw = $payload['amo_status_ids'] ?? ($payload['amo_status_id'] ?? null);
+                $amoStatusIdRaw = $payload['amo_status_id'] ?? null;
+                if ($amoStatusIdRaw === null && array_key_exists('amo_status_ids', $payload)) {
+                    $deprecatedAmoStatusIds = $payload['amo_status_ids'];
+                    if (is_array($deprecatedAmoStatusIds)) {
+                        if ($deprecatedAmoStatusIds === []) {
+                            respondError(
+                                'amo_status_ids array must contain at least one value',
+                                400,
+                                [
+                                    'action' => $action,
+                                    'value' => $deprecatedAmoStatusIds,
+                                ]
+                            );
+                        }
+                        $amoStatusIdRaw = reset($deprecatedAmoStatusIds);
+                    } else {
+                        $amoStatusIdRaw = $deprecatedAmoStatusIds;
+                    }
+                    Logger::info('amo_status_ids array received, using first value for backward compatibility', [
+                        'action' => $action,
+                        'amo_status_ids' => $deprecatedAmoStatusIds,
+                    ]);
+                }
                 $isActiveRaw = $payload['is_active'] ?? true;
                 $isActive = filter_var($isActiveRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
                 if ($isActive === null) {
@@ -140,24 +162,14 @@ if ($method === 'POST') {
                 if ($amoPipelineId === false || $amoPipelineId === null) {
                     respondError('amo_pipeline_id must be an integer', 400, ['value' => $payload['amo_pipeline_id'] ?? null]);
                 }
-                $amoStatusId = null;
-                if (is_array($amoStatusIdsRaw)) {
-                    $firstValue = reset($amoStatusIdsRaw);
-                    $statusId = filter_var($firstValue, FILTER_VALIDATE_INT);
-                    if ($statusId === false || $statusId === null) {
-                        respondError('amo_status_ids must contain at least one integer', 400, ['value' => $firstValue]);
-                    }
-                    $amoStatusId = (int) $statusId;
-                } elseif ($amoStatusIdsRaw !== null) {
-                    $statusId = filter_var($amoStatusIdsRaw, FILTER_VALIDATE_INT);
-                    if ($statusId === false || $statusId === null) {
-                        respondError('amo_status_id must be an integer', 400, ['value' => $amoStatusIdsRaw]);
-                    }
-                    $amoStatusId = (int) $statusId;
+                if ($amoStatusIdRaw === null) {
+                    respondError('amo_status_id is required', 400, ['action' => $action]);
                 }
-                if ($amoStatusId === null) {
-                    respondError('amo_status_id is required', 400, ['value' => $amoStatusIdsRaw]);
+                $statusId = filter_var($amoStatusIdRaw, FILTER_VALIDATE_INT);
+                if ($statusId === false || $statusId === null) {
+                    respondError('amo_status_id must be an integer value', 400, ['value' => $amoStatusIdRaw]);
                 }
+                $amoStatusId = (int) $statusId;
 
                 $id = $manager->upsertMapping(
                     $kaspiStatus,
