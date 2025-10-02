@@ -4,36 +4,26 @@ declare(strict_types=1);
 require_once __DIR__.'/../lib/StatusMappingManager.php';
 require_once __DIR__.'/../lib/Logger.php';
 
-$pdo = new PDO('sqlite::memory:');
-$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+/**
+ * PDO-заглушка, которая запрещает вызовы query() после инициализации менеджера статусов.
+ */
+final class NoQueryPDO extends PDO {
+    public function __construct() {
+        parent::__construct('sqlite::memory:');
+        $this->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    }
 
-$pdo->exec('CREATE TABLE status_mapping (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kaspi_status TEXT,
-    amo_pipeline_id INTEGER,
-    amo_status_id INTEGER
-)');
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+        throw new RuntimeException('Unexpected database query: '.$query);
+    }
+}
 
-$pdo->exec('CREATE TABLE orders_map (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kaspi_status TEXT
-)');
-
-$pdo->exec("INSERT INTO orders_map (kaspi_status) VALUES
-    (' new'),
-    ('COMPLETED'),
-    (NULL),
-    ('')");
-
-$pdo->exec("INSERT INTO status_mapping (kaspi_status, amo_pipeline_id, amo_status_id) VALUES
-    ('approved_by_bank', 1, 111),
-    ('completed', 1, 112)");
-
+$pdo = new NoQueryPDO();
 $manager = new StatusMappingManager($pdo);
 
 $statuses = $manager->getKaspiStatuses();
 
-$expected = ['APPROVED_BY_BANK', 'COMPLETED', 'NEW'];
+$expected = StatusMappingManager::KASPI_STATUSES;
 
 if ($statuses !== $expected) {
     fwrite(STDERR, 'Kaspi statuses do not match expected list'.PHP_EOL);
