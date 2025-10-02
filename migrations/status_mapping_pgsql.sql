@@ -76,11 +76,20 @@ BEGIN
   END IF;
 
   PERFORM 1
-  FROM pg_indexes
-  WHERE schemaname = current_schema()
-    AND tablename = 'status_mapping'
-    AND indexname = 'status_mapping_kaspi_pipeline_unique'
-    AND indexdef LIKE 'CREATE UNIQUE INDEX % ON ' || quote_ident(current_schema()) || '.status_mapping USING btree (kaspi_status, amo_pipeline_id%';
+  FROM pg_index i
+  JOIN pg_class idx ON idx.oid = i.indexrelid
+  JOIN pg_class tbl ON tbl.oid = i.indrelid
+  JOIN pg_namespace ns ON ns.oid = idx.relnamespace
+  JOIN LATERAL (
+    SELECT array_agg(att.attname ORDER BY cols.ordinality) AS columns
+    FROM unnest(i.indkey) WITH ORDINALITY AS cols(attnum, ordinality)
+    JOIN pg_attribute att ON att.attrelid = tbl.oid AND att.attnum = cols.attnum
+  ) ordered_cols ON TRUE
+  WHERE ns.nspname = current_schema()
+    AND tbl.relname = 'status_mapping'
+    AND idx.relname = 'status_mapping_kaspi_pipeline_unique'
+    AND i.indisunique
+    AND ordered_cols.columns = ARRAY['kaspi_status', 'amo_pipeline_id'];
 
   IF NOT FOUND THEN
     IF EXISTS (

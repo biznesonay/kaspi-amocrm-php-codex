@@ -317,35 +317,41 @@ final class StatusMappingManager {
     }
 
     private function performUpsert(string $kaspiStatus, int $amoPipelineId, int $amoStatusId, bool $isActive, int $sortOrder): int {
+        $columns = ['kaspi_status', 'amo_pipeline_id', 'amo_status_id'];
+        $placeholders = [':kaspi_status', ':amo_pipeline_id', ':amo_status_id'];
+        $parameters = [
+            ':kaspi_status' => [$kaspiStatus, PDO::PARAM_STR],
+            ':amo_pipeline_id' => [$amoPipelineId, PDO::PARAM_INT],
+            ':amo_status_id' => [$amoStatusId, PDO::PARAM_INT],
+        ];
+        $updatableColumns = ['amo_status_id'];
+        if ($this->hasSortOrderColumn) {
+            $columns[] = 'sort_order';
+            $placeholders[] = ':sort_order';
+            $parameters[':sort_order'] = [$sortOrder, PDO::PARAM_INT];
+            $updatableColumns[] = 'sort_order';
+        }
+        if ($this->hasActiveColumn) {
+            $columns[] = 'is_active';
+            $placeholders[] = ':is_active';
+            $parameters[':is_active'] = [$isActive, PDO::PARAM_BOOL];
+            $updatableColumns[] = 'is_active';
+        }
+
         $driver = (string) $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         if ($driver === 'pgsql') {
-            $columns = 'kaspi_status, amo_pipeline_id, amo_status_id';
-            $values = ':kaspi_status, :amo_pipeline_id, :amo_status_id';
-            $updates = ['amo_status_id = EXCLUDED.amo_status_id'];
-            if ($this->hasSortOrderColumn) {
-                $columns .= ', sort_order';
-                $values .= ', :sort_order';
-                $updates[] = 'sort_order = EXCLUDED.sort_order';
-            }
-            if ($this->hasActiveColumn) {
-                $columns .= ', is_active';
-                $values .= ', :is_active';
-                $updates[] = 'is_active = EXCLUDED.is_active';
-            }
+            $updates = array_map(
+                static fn(string $column): string => $column.' = EXCLUDED.'.$column,
+                $updatableColumns
+            );
             $updates[] = 'updated_at = NOW()';
-            $sql = 'INSERT INTO status_mapping ('.$columns.') VALUES ('.$values.')'
+            $sql = 'INSERT INTO status_mapping ('.implode(', ', $columns).') VALUES ('.implode(', ', $placeholders).')'
                 .' ON CONFLICT (kaspi_status, amo_pipeline_id) DO UPDATE SET '
                 .implode(', ', $updates)
                 .' RETURNING id';
             $stmt = $this->pdo->prepare($sql);
-            $stmt->bindValue(':kaspi_status', $kaspiStatus);
-            $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
-            $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
-            if ($this->hasSortOrderColumn) {
-                $stmt->bindValue(':sort_order', $sortOrder, PDO::PARAM_INT);
-            }
-            if ($this->hasActiveColumn) {
-                $stmt->bindValue(':is_active', $isActive, PDO::PARAM_BOOL);
+            foreach ($parameters as $placeholder => [$value, $type]) {
+                $stmt->bindValue($placeholder, $value, $type);
             }
             $stmt->execute();
             $id = $stmt->fetchColumn();
@@ -355,33 +361,16 @@ final class StatusMappingManager {
             return (int) $id;
         }
 
-        $columns = 'kaspi_status, amo_pipeline_id, amo_status_id';
-        $values = ':kaspi_status, :amo_pipeline_id, :amo_status_id';
-        $updates = [
-            'amo_status_id = VALUES(amo_status_id)',
-            'updated_at = CURRENT_TIMESTAMP',
-        ];
-        if ($this->hasSortOrderColumn) {
-            $columns .= ', sort_order';
-            $values .= ', :sort_order';
-            $updates[] = 'sort_order = VALUES(sort_order)';
-        }
-        if ($this->hasActiveColumn) {
-            $columns .= ', is_active';
-            $values .= ', :is_active';
-            $updates[] = 'is_active = VALUES(is_active)';
-        }
-        $sql = 'INSERT INTO status_mapping ('.$columns.') VALUES ('.$values.')'
+        $updates = array_map(
+            static fn(string $column): string => $column.' = VALUES('.$column.')',
+            $updatableColumns
+        );
+        $updates[] = 'updated_at = CURRENT_TIMESTAMP';
+        $sql = 'INSERT INTO status_mapping ('.implode(', ', $columns).') VALUES ('.implode(', ', $placeholders).')'
             .' ON DUPLICATE KEY UPDATE '.implode(', ', $updates);
         $stmt = $this->pdo->prepare($sql);
-        $stmt->bindValue(':kaspi_status', $kaspiStatus);
-        $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
-        $stmt->bindValue(':amo_status_id', $amoStatusId, PDO::PARAM_INT);
-        if ($this->hasSortOrderColumn) {
-            $stmt->bindValue(':sort_order', $sortOrder, PDO::PARAM_INT);
-        }
-        if ($this->hasActiveColumn) {
-            $stmt->bindValue(':is_active', $isActive, PDO::PARAM_BOOL);
+        foreach ($parameters as $placeholder => [$value, $type]) {
+            $stmt->bindValue($placeholder, $value, $type);
         }
         $stmt->execute();
         $lastInsertId = (int) $this->pdo->lastInsertId();
@@ -391,9 +380,9 @@ final class StatusMappingManager {
         $stmt = $this->pdo->prepare(
             'SELECT id FROM status_mapping WHERE kaspi_status = :kaspi_status'
             .' AND amo_pipeline_id = :amo_pipeline_id'
-            .' ORDER BY id'
+            .' ORDER BY id LIMIT 1'
         );
-        $stmt->bindValue(':kaspi_status', $kaspiStatus);
+        $stmt->bindValue(':kaspi_status', $kaspiStatus, PDO::PARAM_STR);
         $stmt->bindValue(':amo_pipeline_id', $amoPipelineId, PDO::PARAM_INT);
         $stmt->execute();
         $id = $stmt->fetchColumn();
